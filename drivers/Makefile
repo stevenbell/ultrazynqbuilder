@@ -1,6 +1,5 @@
-ARCH := arm
+ARCH := arm64
 KER_DIR := /home/steven/work/linux-xlnx/
-#KER_DIR := /cad/xilinx/linux-xlnx/
 
 HWCONFIG := ../hwconfig.yml
 
@@ -18,7 +17,7 @@ cmabuffer-objs := cmabuf.o buffer.o
 
 # Call the Linux source makefiles to do the dirty work
 all: driver.c dma_bufferset.c dma_bufferset.h vdma.c buffer.c buffer.h
-	$(MAKE) ARCH=$(ARCH) -C $(KER_DIR) M=$(PWD) CROSS_COMPILE=arm-xilinx-linux-gnueabi- modules
+	$(MAKE) ARCH=$(ARCH) -C $(KER_DIR) M=$(PWD) CROSS_COMPILE=aarch64-linux-gnu- modules
 
 install:
 	scp -i ~/.ssh/zynq_linaro hwacc.ko ubuntu@10.42.0.196:

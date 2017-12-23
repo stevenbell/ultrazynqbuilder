@@ -218,7 +218,7 @@ static int vdma_probe(struct platform_device *pdev)
   if(r_irq == NULL){
     ERROR("IRQ lookup failed.  Check the device tree.\n");
   }
-  TRACE("IRQ number is %d\n", r_irq->start);
+  TRACE("IRQ number is %llu\n", r_irq->start);
   irqok = request_irq(r_irq->start, frame_finished_handler, 0, "xilcam", NULL);
 
   // Get a single character device number

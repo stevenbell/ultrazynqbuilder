@@ -18,7 +18,6 @@
 #include <linux/slab.h> // kmalloc
 #include <asm/io.h> // ioremap and friends
 #include <asm/uaccess.h> // Copy to/from userspace pointers
-#include <asm/cacheflush.h> // flush L1 cache
 #include <asm/outercache.h> // flush L2 cache
 #include <linux/sched.h> // current task struct
 #include <linux/fs.h> // File node numbers
