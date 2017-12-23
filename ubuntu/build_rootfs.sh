@@ -15,14 +15,15 @@ MINOR=$RELEASE.3
 ARCH=arm64
 
 # Assumes the SD card partition is labeled "ROOT". Edit this as appropriate.
-TARGET=/media/`whoami`/ROOT
+#TARGET=/media/`whoami`/ROOT
+TARGET=/media/steven/ROOT
 
 # Get the Ubuntu core filesystem
 RELNAME=ubuntu-base-$MINOR-base-$ARCH.tar.gz
-wget http://cdimage.ubuntu.com/ubuntu-base/releases/$RELEASE/release/$RELNAME
+#wget http://cdimage.ubuntu.com/ubuntu-base/releases/$RELEASE/release/$RELNAME
 
 # Extract it to the target directory
-tar -xf $RELNAME --directory=$TARGET
+#tar -xf $RELNAME --directory=$TARGET
 
 # Set up networking for the chroot
 mkdir -p $TARGET/etc/network
@@ -34,12 +35,16 @@ cp /etc/resolv.conf $TARGET/etc/resolv.conf
 cp /usr/bin/qemu-arm-static $TARGET/usr/bin/
 cp /usr/bin/qemu-aarch64-static $TARGET/usr/bin/
 
+# Copy the configuration script so we can run it inside the chroot
+cp configurecore.sh $TARGET
+
 # Mount the target
 for m in `echo 'sys dev proc'`; do mount /$m $TARGET/$m -o bind; done
-LC_ALL=C chroot $TARGET ./configurecore.sh # Automated configuration
+LC_ALL=C chroot $TARGET /configurecore.sh # Automated configuration
 #LC_ALL=C chroot $TARGET /bin/bash # Just run a shell
 
 # Clean up
 for m in `echo 'sys dev proc'`; do sudo umount $TARGET/$m; done
 rm $TARGET/etc/resolv.conf
+rm $TARGET/configurecore.sh
 

@@ -5,10 +5,10 @@ apt-get update
 apt-get install -y ssh sudo kmod udev ifupdown iproute2 isc-dhcp-client
 
 # Install stuff you probably want
-apt-get install vim iputils-ping
+apt-get install -y vim iputils-ping
 
 # Set up user account
-useradd --groups sudo adm --create-home --shell /bin/bash ubuntu
+useradd --groups sudo,adm --create-home --shell /bin/bash ubuntu
 echo ubuntu:ubuntu | chpasswd
 
 echo "ubuntu-zynq" > /etc/hostname
