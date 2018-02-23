@@ -1,0 +1,275 @@
+/include/ "system-conf.dtsi"
+#include <dt-bindings/phy/phy.h>
+
+/ {
+	model = "Avnet UltraZed-3EG";
+	chosen {
+		bootargs = "earlycon=cdns,mmio,0xFF000000,115200n8 root=/dev/mmcblk1p2 rw rootwait earlyprintk cma=512m";
+	};
+
+/* Stuff for using the R5 with remoteproc
+ * Copied from Xilinx wiki: http://www.wiki.xilinx.com/OpenAMP+2017.3
+ */
+reserved-memory {
+    #address-cells = <2>;
+    #size-cells = <2>;
+    ranges;
+    rproc_0_reserved: rproc@3ed000000 {
+        no-map;
+        /* DDR memory reserved for RPU firmware.
+         * If you want to use predefined shared memory,
+         * you should also reserved them here.
+         */
+        reg = <0x0 0x3ed00000 0x0 0x1000000>;
+    };
+};
+
+power-domains {
+    /* For TCM memories, you will need specify the power domain
+     * IDs. As APU will need to use the power domain ID to request
+     * access through PMU FW.
+     */
+     pd_r5_0: pd_r5_0 {
+        #power-domain-cells = <0x0>;
+        pd-id = <0x7>;
+      };
+    pd_tcm_0_a: pd_tcm_0_a {
+        #power-domain-cells = <0x0>;
+        pd-id = <0xf>;
+    };
+    pd_tcm_0_b: pd_tcm_0_b {
+        #power-domain-cells = <0x0>;
+        pd-id = <0x10>;
+    };
+
+};
+
+amba {
+    /* You will need to specify the firmware memory as "mmio-sram". */
+    r5_0_tcm_a: tcm@ffe00000 {
+        compatible = "mmio-sram";
+        reg = <0 0xFFE00000 0x0 0x10000>;
+        pd-handle = <&pd_tcm_0_a>;
+    };
+    r5_0_tcm_b: tcm@ffe20000 {
+        compatible = "mmio-sram";
+        reg = <0 0xFFE20000 0x0 0x10000>;
+        pd-handle = <&pd_tcm_0_b>;
+    };
+
+    /* DRAM reserved for executable
+     * the address must match the reserved memory section above */
+    elf_ddr_0: ddr@3ed00000 {
+        compatible = "mmio-sram";
+        reg = <0 0x3ed00000 0x0 0x100000>;
+    };
+
+    /* And finally the actual remoteproc entry */
+    /* This is for 2017.2; note that there are some small (but critical)
+     * changes in 2017.3 */
+    test_r50: zynqmp_r5_rproc@0 {
+        compatible = "xlnx,zynqmp-r5-remoteproc-1.0";
+        reg = <0x0 0xff9a0100 0 0x100>, <0x0 0xff340000 0 0x100>, <0x0 0xff9a0000 0 0x100>;
+        reg-names = "rpu_base", "ipi", "rpu_glbl_base";
+        dma-ranges;
+        core_conf = "split0";
+
+        /* Specify the firmware memories here */
+        sram_0 = <&r5_0_tcm_a>;
+        sram_1 = <&r5_0_tcm_b>;
+        sram_2 = <&elf_ddr_0>;
+        pd-handle = <&pd_r5_0>;
+        interrupt-parent = <&gic>;
+        interrupts = <0 29 4>;
+    } ;
+
+};
+
+/* END of R5 remoteproc stuff */
+
+};
+/* END of root node; everything below is a reference to something that already
+ * exists in the tree. */
+
+
+/* Ethernet config for production silicon */
+//&gem3 {
+//	status = "okay";
+//	local-mac-address = [00 0a 35 00 02 90];
+//	phy-mode = "rgmii-id";
+//	phy-handle = <&phy0>;
+//	phy0: phy@9 {
+//		reg = <0x9>;
+//		ti,rx-internal-delay = <0x5>;
+//		ti,tx-internal-delay = <0x5>;
+//		ti,fifo-depth = <0x1>;
+//	};
+//};
+
+/* Ethernet for ES1 silicon */
+&gem3 {
+	status = "okay";
+	local-mac-address = [00 0a 35 00 02 90];
+	phy-mode = "rgmii-id";
+	phy-handle = <&phy0>;
+	phy0: phy@5 {
+		reg = <0x5>;
+		ti,rx-internal-delay = <0x5>;
+		ti,tx-internal-delay = <0x5>;
+		ti,fifo-depth = <0x1>;
+	};
+};
+
+// Hard I2C controller and the DP clock generator connected to it
+&i2c1 {
+     status = "okay";
+     clock-frequency = <400000>;
+     i2cswitch@70 { /* u7 */
+           compatible = "nxp,pca9543";
+           #address-cells = <1>;
+           #size-cells = <0>;
+           reg = <0x70>;
+           i2c@0 { /* i2c mw 70 0 1 */
+                #address-cells = <1>;
+                #size-cells = <0>;
+                reg = <0>;
+// TODO: the other board has an eeprom@52 (U5 on IOCC)?
+                eeprom: eeprom1@50 { /* 2048-bit (8-bit X 256) IIC_EEPROM - SOM U8 */
+                     compatible = "at,24c02";
+                     reg = <0x50>;
+                };
+                
+                macid: eeprom2@51 { /* IIC_MAC_ID - IOCC U5 */
+                     compatible = "at,24mac402";
+                     reg = <0x51>;
+                };
+
+                idt5901: clock-generator@6a { /* IDT 5P49V5935 clock generator - IOCC U1 */
+                     #clock-cells = <0>;
+                     compatible = "idt,idt5901";
+                     reg = <0x6a>;
+                     input-freq = <25000000>;
+                     clk-freq = <75000000>;
+                     output-num = <4>;
+                };
+           };
+           i2c@1 { /* i2c mw 70 0 2 */
+                #address-cells = <1>;
+                #size-cells = <0>;
+                reg = <1>;
+                /* SMBUS */
+           };
+     };
+};
+
+&qspi {
+	#address-cells = <1>;
+	#size-cells = <0>;
+	status = "okay";
+	flash0: flash@0 {
+		compatible = "micron,n25q256a"; /* 32MB */
+		#address-cells = <1>;
+		#size-cells = <1>;
+		reg = <0x0>;
+		spi-tx-bus-width = <1>;
+		spi-rx-bus-width = <4>; /* FIXME also DUAL configuration possible */
+		spi-max-frequency = <108000000>; /* Based on DC1 spec */
+		partition@qspi-boot { 
+			label = "qspi-boot";
+			reg = <0x0 0x780000>;
+		};
+		partition@qspi-bootenv { 
+			label = "qspi-bootenv";
+			reg = <0x780000 0x80000>;
+		};
+		partition@qspi-linux { 
+			label = "qspi-linux";
+			reg = <0x800000 0x3800000>;
+		};
+	};
+};
+
+/* SD0 eMMC, 8-bit wide data bus */
+&sdhci0 {
+	status = "okay";
+	bus-width = <8>;
+	clock-frequency = <199998006>;
+	max-frequency = <50000000>;
+};
+
+/* SD1 with level shifter */
+&sdhci1 {
+	status = "okay";
+	no-1-8-v;	/* for 1.0 silicon */
+	xlnx,mio_bank = <1>;
+	disable-wp;
+};
+
+/* ULPI SMSC USB3320 */
+&usb0 {
+	status = "okay";
+};
+
+&dwc3_0 {
+	status = "okay";
+	dr_mode = "host";
+	phy-names = "usb3-phy";
+};
+
+/* DisplayPort Configuration */
+&xilinx_drm {
+	status = "okay";
+	clocks = <&idt5901>;
+	xlnx,vid-clk-pl;
+	planes {
+		xlnx,pixel-format = "argb8888";
+	};
+};
+
+&xlnx_dp {
+	status = "okay";
+	phy-names = "dp-phy0", "dp-phy1";
+	phys = <&lane3 PHY_TYPE_DP 0 3 27000000>;
+};
+
+&xlnx_dp_sub {
+	status = "okay";
+	xlnx,vid-clk-pl;
+	xlnx,gfx-fmt = "argb8888";
+};
+
+&xlnx_dp_snd_card {
+	status = "okay";
+};
+
+&xlnx_dp_snd_codec0 {
+	status = "okay";
+};
+
+&xlnx_dp_snd_pcm0 {
+	status = "okay";
+};
+
+&xlnx_dp_snd_pcm1 {
+	status = "okay";
+};
+
+&xlnx_dpdma {
+	status = "okay";
+};
+/* END DisplayPort config */
+
+/* Turn all the fabric clocks on, because petalinux tries to turn them off
+ * to save power. */
+&clkc {
+  fclk-enable = <0xf>;
+};
+
+&fclk0 {
+  status = "okay";
+};
+
+&fclk1 {
+  status = "okay";
+};
+
