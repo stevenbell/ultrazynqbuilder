@@ -10,6 +10,7 @@
 #include <linux/device.h>
 #include <linux/dma-mapping.h>
 #include <linux/string.h>
+#include <linux/of_device.h>
 
 #include "common.h"
 #include "buffer.h"
@@ -20,7 +21,7 @@ extern const int debug_level; // This is defined in the including driver
 // Asking for smaller images just returns a whole large buffer, and asking
 // for a larger image fails.  A better solution would be to use a buddy
 // allocator and give out pieces that are only as large as necessary.
-#define N_BUFFERS 8
+#define N_BUFFERS 4
 #define BUFFER_SIZE (2048*1080*4) // This number must be a multiple of 4k pages so mmap works
 
 unsigned char free_flag[N_BUFFERS];
@@ -31,23 +32,36 @@ void* base_kern_addr = NULL; // Kernel virtual base address of buffer
 int init_buffers(struct device* dev)
 {
   int i;
-  //dma_set_mask (dev, 0xffffffff); // Anything in a 32-bit space is fair game
-  dma_set_coherent_mask (dev, 0xffffffff); // Anything in a 32-bit space is fair game
+  // Configure the DMA masks
+  // Anything within actual DRAM (up to 2GB) is fair game
+  // This returns zero on success (contrary to LDD3)
+  if(dma_set_mask(dev, dma_get_required_mask(dev))){
+    WARNING("Failed to configure DMA mask\n");
+  }
+  if(dma_set_coherent_mask(dev, DMA_BIT_MASK(31))){
+    WARNING("Failed to configure DMA coherent mask\n");
+  }
+
+  of_dma_configure(dev, NULL);
+
+  DEBUG("Required mask is 0x%llx\n", dma_get_required_mask(dev));
+  DEBUG("Current mask is 0x%llx\n", dev->dma_mask);
+  DEBUG("Current coherent mask is 0x%llx\n", dev->coherent_dma_mask);
 
   // Allocate a huge chunk of memory
   // For now, let's try and do this with the new-ish Linux Contiguous Memory
   // Allocator (CMA).
   // Boot-time parameter should be set in the devicetree: cma=100MB
-  printk("Allocating %d for CMA.\n", N_BUFFERS*BUFFER_SIZE);
+  DEBUG("Allocating %d (%dMB) for CMA.\n", N_BUFFERS*BUFFER_SIZE, N_BUFFERS*BUFFER_SIZE/(1024*1024));
   base_kern_addr = dma_alloc_coherent(dev, N_BUFFERS*BUFFER_SIZE,
                          (dma_addr_t*)&base_phys_addr, GFP_KERNEL);
   // TODO: make sure this is page-aligned so mmap works later
   if(base_kern_addr == NULL){
-    printk("Failed to allocate memory! Check CMA size.\n");
+    ERROR("Failed to allocate memory! Check CMA size.\n");
     return(-1);
   }
 
-  printk("memory allocated at %lx / %lx\n", (unsigned long)base_kern_addr, base_phys_addr);
+  DEBUG("memory allocated at %lx / %lx\n", (unsigned long)base_kern_addr, base_phys_addr);
 
   // Create some buffers to fill with data as the camera streams.
   for(i = 0; i < N_BUFFERS; i++){
@@ -57,7 +71,7 @@ int init_buffers(struct device* dev)
     buffers[i].mmap_offset = i * BUFFER_SIZE;
     //buffers[i].cvals = kmalloc(sizeof(struct mMap), GFP_KERNEL);
     free_flag[i] = 1;
-printk("Buffer %d  phys: %lx  kern: %lx\n", i, (unsigned long)buffers[i].phys_addr, (unsigned long)buffers[i].kern_addr);
+DEBUG("Buffer %d  phys: %lx  kern: %lx\n", i, (unsigned long)buffers[i].phys_addr, (unsigned long)buffers[i].kern_addr);
   }
 
   return(0); // Success
@@ -67,7 +81,7 @@ printk("Buffer %d  phys: %lx  kern: %lx\n", i, (unsigned long)buffers[i].phys_ad
 void cleanup_buffers(struct device* dev)
 {
   dma_free_coherent(dev, N_BUFFERS*BUFFER_SIZE, base_kern_addr, base_phys_addr);
-  printk("Freed CMA memory\n");
+  DEBUG("Freed CMA memory\n");
   base_kern_addr = NULL;
 
 /*
@@ -82,6 +96,12 @@ void* get_base_addr(void)
 {
   return(base_kern_addr);
 }
+
+unsigned long get_phys_addr(void)
+{
+  return(base_phys_addr);
+}
+
 
 /* depth is in bytes
  * stride is in pixels (i.e., multiply by depth to get stride in bytes)

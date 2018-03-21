@@ -18,6 +18,7 @@
 #include <linux/slab.h> // kmalloc
 #include <asm/io.h> // ioremap and friends
 #include <asm/uaccess.h> // Copy to/from userspace pointers
+#include <asm/cacheflush.h> // flush L1 cache
 #include <asm/outercache.h> // flush L2 cache
 #include <linux/sched.h> // current task struct
 #include <linux/fs.h> // File node numbers
@@ -118,7 +119,7 @@ void dma_finished_work(struct work_struct*);
 DECLARE_WORK(dma_launch_struct, dma_launch_work);
 DECLARE_WORK(dma_finished_struct, dma_finished_work);
 
-const int debug_level = 3; // 0 is errors only, increasing numbers print more stuff
+const int debug_level = 4; // 0 is errors only, increasing numbers print more stuff
 
 // If the DMAs are configured in the multichannel mode,
 // use this flag to enable 2D transfer mode
@@ -218,7 +219,7 @@ static int dev_close(struct inode *inode, struct file *file)
 void build_sg_chain(const Buffer buf, unsigned long* sg_ptr_base, unsigned long* sg_phys)
 {
   int sg; // Descriptor count
-  unsigned long* sg_ptr = sg_ptr_base; // Pointer which will be incremented along the chain
+  unsigned int* sg_ptr = sg_ptr_base; // Pointer which will be incremented along the chain
   TRACE("build_sg_chain: sg_ptr 0x%lx, sg_phys 0x%lx\n", (unsigned long)sg_ptr, (unsigned long)sg_phys);
 
   for(sg = 0; sg < buf.height; sg++){
@@ -251,8 +252,7 @@ void build_sg_chain(const Buffer buf, unsigned long* sg_ptr_base, unsigned long*
 // With this feature, a transfer of a sub-block of 2-D data requires only one descriptor.
 void build_sg_chain_2D(const Buffer buf, unsigned long* sg_ptr_base, unsigned long* sg_phys)
 {
-  unsigned long* sg_ptr = sg_ptr_base; // Pointer which will be incremented along the chain
-  TRACE("build_sg_chain_2D: sg_ptr 0x%lx, sg_phys 0x%lx\n", (unsigned long)sg_ptr, (unsigned long)sg_phys);
+  unsigned int* sg_ptr = sg_ptr_base; // Pointer which will be incremented along the chain (2/18/18 WC updated from long to int)
 
   // the sg chain only has one descriptor
   sg_ptr[0] = virt_to_phys(sg_ptr + SG_DESC_SIZE); // Pointer to next descriptor
@@ -289,6 +289,9 @@ void build_sg_chain_2D(const Buffer buf, unsigned long* sg_ptr_base, unsigned lo
   *sg_phys = virt_to_phys(sg_ptr_base);
   //TRACE("build_sg_chain_2D: call dma_map_single()\n");
   //*sg_phys = dma_map_single(pipe_dev, sg_ptr_base, SG_DESC_BYTES * 1, DMA_TO_DEVICE);
+
+  TRACE("build_sg_chain_2D: sg_ptr 0x%lx, sg_phys 0x%lx, *sg_ptr 0x%lx, *sg_phys 0x%lx\n", (unsigned long)sg_ptr, (unsigned long)sg_phys, (unsigned long)*sg_ptr, (unsigned long)*sg_phys);
+
 }
 
 /* Sets up a buffer for processing through the stencil path.  This drops the
@@ -576,6 +579,8 @@ static int hwacc_probe(struct platform_device *pdev)
 {
   int irqok;
   struct resource* r_irq = NULL;
+	struct resource *r_mem; /* IO mem resources */
+	struct device *dev = &pdev->dev;
 
   // TODO: this is pretty fragile, as it relies on the ordering in the device
   // tree.  It might be better to break them out in the device tree.
@@ -584,9 +589,11 @@ static int hwacc_probe(struct platform_device *pdev)
   if(r_irq == NULL){
     ERROR("IRQ lookup failed.  Check the device tree.\n");
   }
-  TRACE("IRQ number is %d\n", r_irq->start);
-  irqok = request_irq(r_irq->start, dma_${streams[n]['name']}_finished_handler, 0, "hwacc ${streams[n]['name']}", NULL);
-  if(irqok != 0){ return irqok; }
+  else{
+    TRACE("IRQ number is %d\n", r_irq->start);
+    irqok = request_irq(r_irq->start, dma_${streams[n]['name']}_finished_handler, 0, "hwacc ${streams[n]['name']}", NULL);
+    if(irqok != 0){ return irqok; }
+  }
 % endfor
 
   // Create workqueue threads
@@ -662,13 +669,16 @@ static int hwacc_remove(struct platform_device *pdev)
 }
 
 static struct of_device_id hwacc_of_match[] = {
-  { .compatible = "hwacc", },
+  // Bind to the DMA engine so we can get its info from the device tree
+//  { .compatible = "hwacc", },
+  { .compatible = "xlnx,axi-dma-1.00.a", },
   {}
 };
 
 static struct platform_driver hwacc_driver = {
 	.driver = {
 		.name = "hwacc",
+		.owner = THIS_MODULE,
 		.of_match_table = hwacc_of_match,
 	},
 	.probe = hwacc_probe,

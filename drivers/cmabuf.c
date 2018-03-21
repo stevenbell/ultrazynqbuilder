@@ -97,13 +97,23 @@ long dev_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
 
 int vma_fault(struct vm_area_struct *vma, struct vm_fault *vmf)
 {
-  // Get the index of the page
-  // This is base_addr + offset
-  // TODO: do some error checking on the offset
-  vmf->page = virt_to_page(get_base_addr() + (vmf->pgoff << PAGE_SHIFT));
-  get_page(vmf->page);
+  struct page* pageptr;
 
-  //DEBUG("Page fault: %lu %x %x", vmf->pgoff, get_base_addr(), vmf->page);
+  // Calculate with physical address, ala udmabuf/LDD3
+  uint64_t offset             = vmf->pgoff << PAGE_SHIFT;
+  uint64_t phys_addr          = get_phys_addr() + offset;
+  unsigned long pageframe     = phys_addr >> PAGE_SHIFT;
+
+  DEBUG("vma_fault() offset: %llx  phys_addr: %llx pageframe: %lx\n",
+          offset, phys_addr, pageframe);
+
+  if(!pfn_valid(pageframe)) {
+    return(-1);
+  }
+  pageptr = pfn_to_page(pageframe);
+  get_page(pageptr);
+  vmf->page = pageptr;
+
   return(0);
 }
 
