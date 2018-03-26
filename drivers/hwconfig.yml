@@ -1,0 +1,41 @@
+# Hexadecimal addresses/values will be converted to decimal by Python, so keep them as
+# strings so they come out as hex in the generated code.
+
+# Base address of the accelerator
+baseaddr: "0x80030000"
+# Size of the accelerator register space, bytes
+controlregs: 0x10
+# Interrupt for the VDMA (xilcam) engine
+vdma_irq: 123 #TBD
+
+registers:
+  control: 0x00
+  globalint: 0x04
+  ipint: 0x08
+  ipintstatus: 0x0c
+
+# This is an array, since order matters between the driver and Halide
+streams:
+  - name: "input0"
+    type: "input"
+    width: 170
+    height: 170
+    depth: 3 # aka bytes per pixel
+    dma_addr: "0x80040000"
+    irq: 121
+ 
+  - name: "output"
+    type: "output"
+    width: 160
+    height: 160
+    depth: 1
+    dma_addr: "0x80040030"
+    irq: 122
+ 
+taps:
+  - name: "thresholds"
+    type: "usertap"
+    width: 2
+    height: 1
+    depth: 1
+ 

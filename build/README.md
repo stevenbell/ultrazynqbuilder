@@ -1,3 +1,4 @@
+# Purpose
 Running the following shell script will accomplish the following:
 	1. Generate the FrankenCamera hardware design and Vivado project bitfile with the embedded HLS core
 	2. Generates the parameterized driver files driver.c and dma_bufferset.h based off of hwconfig.yml.
@@ -5,8 +6,10 @@ Running the following shell script will accomplish the following:
 	3. Sets all the proper kernel configurations.
 	4. Builds the petalinux project and generates the boot collateral (boot.bin, image.ub).
 
+# Instructions
 To run: sh ./mkproject.sh PATH_TO_UNZIPPED_HLS_CORE
 
 PATH_TO_UNZIPPED_HLS_CORE must contain the component.xml file in the main directory.
 
-
+The hwconfig.yml file in ./drivers should be updated to reflect the the width and height configurations of the
+HLS core. Everything else should be left as is.

@@ -3,7 +3,7 @@
 #Usage ./generate_tcl.py PATH_TO_HLS_CORE PATH_TO_HW_YAML_CONFIG
 
 
-if [ -z "$1"]; then
+if [ -z "$1" ]; then
 	echo "Wrong usage. Expected: sh mkproject.sh PATH_TO_HLS_IP_CORE_DIRECTORY"
 else
 	make clean
