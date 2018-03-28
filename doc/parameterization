@@ -1,0 +1,11 @@
+# Overview
+There are a number of files in the build process which must be parameterized based on what is being built:
+
+- Hardware creation script
+- Driver files
+
+The basic mechanism for this is the [Mako template engine](http://makotemplates.org) with a parameter configuration file.  The `parameterize.py' script reads this config file to generate a key:value map and calls Mako to parameterize the file.
+
+The parameters themselves come from user preferences (e.g., how many parallel cameras to include) and from the hardware accelerators (e.g., number and size of data streams).
+The former are specified with the `hwconfig.user` file.  An example of such a file is in the repository as `hwconfig.example`.  Accelerator-specific parameters are extracted with `extractparams.py`, which reads the user configuration file and fills in parameters for all of the specified accelerators.  This produces a complete parameters file, `hwconfig.all`, which can then be used repeatedly by `parameterize.py'.
+

@@ -1,0 +1,5 @@
+*.swp
+hwconfig.all
+vivado.log*
+vivado.jou*
+vivado_pid*

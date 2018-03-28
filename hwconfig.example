@@ -1,0 +1,15 @@
+# Example project configuration file
+# Copy to hwconfig.user and edit as appropriate
+# See doc/parameterization.md for more details
+
+name: example
+use_displayport: y
+use_csi_camera: [n, n, n, n]
+
+# If no inputs or outputs are specified, they are implicitly hooked up to a DMA engine
+hw:
+- type: hls
+  name: canny
+  path: /nobackup/sebell/work/ultrazed/ip_repo/xilinx_com_hls_hls_target_1_0/
+
+
