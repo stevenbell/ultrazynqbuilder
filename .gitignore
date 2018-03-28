@@ -1,4 +1,5 @@
 *.swp
+hwconfig.user
 hwconfig.all
 vivado.log*
 vivado.jou*
