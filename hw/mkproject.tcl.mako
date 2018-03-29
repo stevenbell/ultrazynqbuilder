@@ -37,8 +37,10 @@ set bd_name design_1
 # productionsilicon = y/n
 % if productionsilicon == 'y':
 set board_part xczu3eg-sfva625-1-i
+set board_prod _production
 % else:
 set board_part xczu3eg-sfva625-1-i-es1
+set board_prod ""
 % endif
 
 
@@ -49,14 +51,12 @@ set board_part xczu3eg-sfva625-1-i-es1
 create_project $project_name $project_dir -part $board_part
 
 % if board == 'iocc':
-set_property BOARD_PART em.avnet.com:ultrazed_eg_iocc_production:part0:1.0 [current_project]
+set_property BOARD_PART em.avnet.com:ultrazed_eg_iocc$board_prod:part0:1.0 [current_project]
 % elif board == 'pciecc':
-set_property BOARD_PART em.avnet.com:ultrazed_eg_pciecc:part0:1.0 [current_project]
+set_property BOARD_PART em.avnet.com:ultrazed_eg_pciecc$board_prod:part0:1.0 [current_project]
 % else:
 puts "This script was configured without a carrier board specified.  Expect problems."
 % endif
-
-## TODO: confirm that the part is set correctly, and/or not overridden by the board
 
 create_bd_design $bd_name
 
@@ -151,9 +151,6 @@ proc create_root_design { } {
      catch {common::send_msg_id "BD_TCL-101" "ERROR" "Parent <$parentObj> has TYPE = <$parentType>. Expected to be <hier>."}
      return
   }
-
-  # Save current instance; Restore later
-  set oldCurInst [current_bd_instance .]
 
   # Set parent object as current
   current_bd_instance $parentObj
@@ -368,6 +365,10 @@ CONFIG.PSU__USE__VIDEO {1} \
   connect_bd_net [get_bd_pins clk2_reset/slowest_sync_clk] [get_bd_pins zynq_ultra_ps_e_0/pl_clk2]
   connect_bd_net [get_bd_pins clk2_reset/ext_reset_in] [get_bd_pins zynq_ultra_ps_e_0/pl_resetn0]
 
+  # Specify these explicitly, because block automation does weird things sometimes
+  set controlclk /zynq_ultra_ps_e_0/pl_clk0
+  set dataclk /zynq_ultra_ps_e_0/pl_clk1
+
   # Create the interconnect for the AXI-lite control interfaces
   create_bd_cell -type ip -vlnv xilinx.com:ip:smartconnect:1.0 control_xconn
   # Start with just 1 master, 1 slave; we'll add more as necessary
@@ -406,7 +407,7 @@ CONFIG.GPIO_BOARD_INTERFACE {led_8bits} \
   connect_bd_intf_net -intf_net axi_gpio_0_GPIO2 [get_bd_intf_ports CAM_GPIO] [get_bd_intf_pins axi_gpio_0/GPIO2]
 
   # Automagically connect to control bus
-  apply_bd_automation -rule xilinx.com:bd_rule:axi4 -config {Master "/zynq_ultra_ps_e_0/M_AXI_HPM0_LPD" intc_ip "/control_xconn" Clk_xbar "Auto" Clk_master "Auto" Clk_slave "Auto" }  [get_bd_intf_pins axi_gpio_0/S_AXI]
+  apply_bd_automation -rule xilinx.com:bd_rule:axi4 -config "Master /zynq_ultra_ps_e_0/M_AXI_HPM0_LPD intc_ip /control_xconn Clk_xbar Auto Clk_master $controlclk Clk_slave $controlclk "  [get_bd_intf_pins axi_gpio_0/S_AXI]
 
 
   # Add GPIO for controlling AxPROT for coherency
@@ -419,14 +420,14 @@ CONFIG.C_GPIO_WIDTH {3} \
   # Connect to AWPROT/ARPROT for AXI HPC port
   connect_bd_net -net axi_gpio_1_gpio_io_o [get_bd_pins axi_gpio_1/gpio_io_o] [get_bd_pins zynq_ultra_ps_e_0/saxigp0_arprot] [get_bd_pins zynq_ultra_ps_e_0/saxigp0_awprot]
 
-  apply_bd_automation -rule xilinx.com:bd_rule:axi4 -config {Master "/zynq_ultra_ps_e_0/M_AXI_HPM0_LPD" intc_ip "/control_xconn" Clk_xbar "Auto" Clk_master "Auto" Clk_slave "Auto" }  [get_bd_intf_pins axi_gpio_1/S_AXI]
+  apply_bd_automation -rule xilinx.com:bd_rule:axi4 -config "Master /zynq_ultra_ps_e_0/M_AXI_HPM0_LPD intc_ip /control_xconn Clk_xbar Auto Clk_master $controlclk Clk_slave $controlclk "  [get_bd_intf_pins axi_gpio_1/S_AXI]
 
 
   # Add I2C controller for cameras (and other I2C stuff on the FMC)
   set FMC_IIC [ create_bd_intf_port -mode Master -vlnv xilinx.com:interface:iic_rtl:1.0 FMC_IIC ]
   set camera_iic [ create_bd_cell -type ip -vlnv xilinx.com:ip:axi_iic:2.0 camera_iic ]
   connect_bd_intf_net -intf_net camera_iic_IIC [get_bd_intf_ports FMC_IIC] [get_bd_intf_pins camera_iic/IIC]
-  apply_bd_automation -rule xilinx.com:bd_rule:axi4 -config {Master "/zynq_ultra_ps_e_0/M_AXI_HPM0_LPD" intc_ip "/control_xconn" Clk_xbar "Auto" Clk_master "Auto" Clk_slave "Auto" }  [get_bd_intf_pins camera_iic/S_AXI]
+  apply_bd_automation -rule xilinx.com:bd_rule:axi4 -config "Master /zynq_ultra_ps_e_0/M_AXI_HPM0_LPD intc_ip /control_xconn Clk_xbar Auto Clk_master $controlclk Clk_slave $controlclk"  [get_bd_intf_pins camera_iic/S_AXI]
 
 
   # Set up the DisplayPort connections
@@ -463,7 +464,7 @@ CONFIG.C_GPIO_WIDTH {3} \
 
   # Connect clk and reset
   connect_bd_net [get_bd_pins ${module['name']}_dphy/core_clk] [get_bd_pins zynq_ultra_ps_e_0/pl_clk2]
-  connect_bd_net [get_bd_pins ${module['name']}_dphy/core_rst] [get_bd_pins clk2_reset/peripheral_aresetn]
+  connect_bd_net [get_bd_pins ${module['name']}_dphy/core_rst] [get_bd_pins clk2_reset/peripheral_reset]
 
 
   # Input ports for DPHY
@@ -478,7 +479,7 @@ CONFIG.C_GPIO_WIDTH {3} \
   connect_bd_net -net data_rxp_1 [get_bd_ports ${module['name']}_dphy_data_rxp] [get_bd_pins ${module['name']}_dphy/data_rxp]
 
   # Create the csirx module
-  set_property  ip_repo_paths ${module['path']} [current_project]
+  set_property ip_repo_paths "${module['path']} [get_property  ip_repo_paths [current_project]]" [current_project]
   update_ip_catalog  
   set ${module['name']}_csirx [ create_bd_cell -type ip -vlnv vlsiweb.stanford.edu:csi:axi_csi:1.0 ${module['name']}_csirx ]
 
@@ -492,15 +493,28 @@ CONFIG.C_GPIO_WIDTH {3} \
   connect_bd_net [get_bd_pins ${module['name']}_csirx/rxbyteclkhs_resetn] [get_bd_pins ${module['name']}_reset/peripheral_aresetn]
 
   # Connect AXI-lite for csirx
-  apply_bd_automation -rule xilinx.com:bd_rule:axi4 -config {Master "/zynq_ultra_ps_e_0/M_AXI_HPM0_LPD" intc_ip "/control_xconn" Clk_xbar "Auto" Clk_master "Auto" Clk_slave "Auto" }  [get_bd_intf_pins ${module['name']}_csirx/S00_AXI]
+  apply_bd_automation -rule xilinx.com:bd_rule:axi4 -config "Master /zynq_ultra_ps_e_0/M_AXI_HPM0_LPD intc_ip /control_xconn Clk_xbar Auto Clk_master $controlclk Clk_slave $controlclk "  [get_bd_intf_pins ${module['name']}_csirx/S00_AXI]
 
   # And connect the PPI
   connect_bd_intf_net [get_bd_intf_pins ${module['name']}_dphy/rx_mipi_ppi_if] [get_bd_intf_pins ${module['name']}_csirx/PPI_IN]
 
   # Connect FIFO to handle clock crossing
   set ${module['name']}_fifo [ create_bd_cell -type ip -vlnv xilinx.com:ip:axis_data_fifo:1.1 ${module['name']}_fifo ]
-  set_property -dict [list CONFIG.FIFO_DEPTH {256}] $${module['name']}_fifo
+  set_property -dict [list CONFIG.FIFO_DEPTH {256} CONFIG.IS_ACLK_ASYNC {1} ] $${module['name']}_fifo
   connect_bd_intf_net [get_bd_intf_pins ${module['name']}_fifo/S_AXIS] [get_bd_intf_pins ${module['name']}_csirx/AXIS_OUT]
+
+  connect_bd_net [get_bd_pins ${module['name']}_fifo/s_axis_aclk] [get_bd_pins ${module['name']}_dphy/rxbyteclkhs]
+  connect_bd_net [get_bd_pins ${module['name']}_fifo/s_axis_aresetn] [get_bd_pins ${module['name']}_reset/peripheral_aresetn]
+  connect_bd_net [get_bd_pins ${module['name']}_fifo/m_axis_aclk] [get_bd_pins zynq_ultra_ps_e_0/pl_clk1]
+  connect_bd_net [get_bd_pins ${module['name']}_fifo/m_axis_aresetn] [get_bd_pins clk1_reset/peripheral_aresetn]
+
+  # And finally a dwidth-converter to drop down to 1 pix/cycle
+  set ${module['name']}_dwidth [ create_bd_cell -type ip -vlnv xilinx.com:ip:axis_dwidth_converter:1.1 ${module['name']}_dwidth ]
+  set_property -dict [ list CONFIG.M_TDATA_NUM_BYTES {2} ] $${module['name']}_dwidth
+
+  connect_bd_intf_net [get_bd_intf_pins ${module['name']}_fifo/M_AXIS] [get_bd_intf_pins ${module['name']}_dwidth/S_AXIS]
+  connect_bd_net [get_bd_pins ${module['name']}_dwidth/aclk] [get_bd_pins zynq_ultra_ps_e_0/pl_clk1]
+  connect_bd_net [get_bd_pins ${module['name']}_dwidth/aresetn] [get_bd_pins clk1_reset/peripheral_aresetn]
 
   % elif module['type'] == 'dma':
   # Instantiate the DMA
@@ -513,32 +527,19 @@ CONFIG.c_sg_include_stscntrl_strm {0} \
 
   # Connect AXI-lite and scatter-gather
   # Leave the others disconnected, since they may not exist...
-  apply_bd_automation -rule xilinx.com:bd_rule:axi4 -config {Master "/zynq_ultra_ps_e_0/M_AXI_HPM0_LPD" intc_ip "/control_xconn" Clk_xbar "Auto" Clk_master "Auto" Clk_slave "Auto" }  [get_bd_intf_pins ${module['name']}/S_AXI_LITE]
-  apply_bd_automation -rule xilinx.com:bd_rule:axi4 -config {Slave "/zynq_ultra_ps_e_0/S_AXI_HPC0_FPD" intc_ip "/data_xconn" Clk_xbar "Auto" Clk_master "Auto" Clk_slave "Auto" }  [get_bd_intf_pins ${module['name']}/M_AXI_SG]
+  apply_bd_automation -rule xilinx.com:bd_rule:axi4 -config "Master /zynq_ultra_ps_e_0/M_AXI_HPM0_LPD intc_ip /control_xconn Clk_xbar Auto Clk_master $controlclk Clk_slave $controlclk "  [get_bd_intf_pins ${module['name']}/S_AXI_LITE]
+  apply_bd_automation -rule xilinx.com:bd_rule:axi4 -config "Slave /zynq_ultra_ps_e_0/S_AXI_HPC0_FPD intc_ip /data_xconn Clk_xbar $dataclk Clk_master $dataclk Clk_slave $dataclk "  [get_bd_intf_pins ${module['name']}/M_AXI_SG]
 
   % elif module['type'] == 'hls':
 
   # Instantiate the HLS module
-  set_property  ip_repo_paths ${module['path']} [current_project]
+  set_property ip_repo_paths "${module['path']} [get_property  ip_repo_paths [current_project]]" [current_project]
   update_ip_catalog  
   set ${module['name']} [ create_bd_cell -type ip -vlnv ${module['vlnv']} ${module['name']} ]
 
-  % endif
-  ## Any other type just gets ignored
+  # Use block automation, but connect the clock to the high-speed data clock
+  apply_bd_automation -rule xilinx.com:bd_rule:axi4 -config "Master /zynq_ultra_ps_e_0/M_AXI_HPM0_LPD intc_ip /control_xconn Clk_xbar Auto Clk_master $controlclk Clk_slave $dataclk"  [get_bd_intf_pins ${module['name']}/s_axi_config]
 
-% endfor
-
-
-
-
-  return
- ### Instantiate and connect the Halide-HLS cores
-% for module in [h for h in hw if h['type'] == 'hls']:
-  # Connect the AXI-lite control interface using block automation
-  #apply_bd_automation -rule xilinx.com:bd_rule:axi4 -config {Master "/zynq_ultra_ps_e_0/M_AXI_HPM0_LPD" intc_ip "/ps8_0_axi_periph" Clk_xbar "Auto" Clk_master "Auto" Clk_slave "Auto" }  [get_bd_intf_pins canny/s_axi_config]
-
-  # Connect the AXI-stream interfaces
-  ## TODO: handle more than one input/output
   % for stream in module['streams']:
   # AXI-stream interface ${stream['name']}
     % if stream['type'] == 'input':
@@ -552,11 +553,13 @@ CONFIG.c_sg_include_stscntrl_strm {0} \
     ] $${stream['dwc']}
 
   connect_bd_intf_net -intf_net ${stream['dwc']}_M_AXIS [get_bd_intf_pins ${stream['dwc']}/M_AXIS] [get_bd_intf_pins ${module['name']}/${stream['name']}]
-  connect_bd_intf_net -intf_net axi_dma_0_M_AXIS [get_bd_intf_pins axi_dma_0/M_AXIS_MM2S] [get_bd_intf_pins ${stream['dwc']}/S_AXIS]
+  connect_bd_net [get_bd_pins ${stream['dwc']}/aclk] [get_bd_pins zynq_ultra_ps_e_0/pl_clk1]
+  connect_bd_net [get_bd_pins ${stream['dwc']}/aresetn] [get_bd_pins clk1_reset/peripheral_aresetn]
 
+  set ${module['name']}_${stream['name']}_connection ${stream['dwc']}/S_AXIS
       % else:
   # Connect the IP core directly to the DMA
-  connect_bd_intf_net -intf_net axi_dma_0_M_AXIS [get_bd_intf_pins axi_dma_0/M_AXIS_MM2S] [get_bd_intf_pins ${module['name']}/${stream['name']}]
+  set ${module['name']}_${stream['name']}_connection ${module['name']}/${stream['name']}
       % endif  
     % elif stream['type'] == 'output':
       % if stream['depth'] != 2:
@@ -569,91 +572,88 @@ CONFIG.c_sg_include_stscntrl_strm {0} \
     ] $${stream['dwc']}
 
   connect_bd_intf_net -intf_net ${module['name']}_M_AXIS [get_bd_intf_pins ${module['name']}/${stream['name']}] [get_bd_intf_pins ${stream['dwc']}/S_AXIS]
-  connect_bd_intf_net -intf_net axi_dma_0_S_AXIS [get_bd_intf_pins ${stream['dwc']}/M_AXIS] [get_bd_intf_pins axi_dma_0/S_AXIS_S2MM]
+  connect_bd_net [get_bd_pins ${stream['dwc']}/aclk] [get_bd_pins zynq_ultra_ps_e_0/pl_clk1]
+  connect_bd_net [get_bd_pins ${stream['dwc']}/aresetn] [get_bd_pins clk1_reset/peripheral_aresetn]
 
+  set ${module['name']}_${stream['name']}_connection ${stream['dwc']}/M_AXIS
       % else:
   # Connect the IP core directly to the DMA
-  connect_bd_intf_net -intf_net axi_dma_0_S_AXIS [get_bd_intf_pins ${module['name']}/${stream['name']}] [get_bd_intf_pins axi_dma_0/S_AXIS_S2MM] 
+  set ${module['name']}_${stream['name']}_connection ${module['name']}/${stream['name']}
       % endif  
     % endif
   % endfor
 
-  # Hooks up between HLS output stream and AXI DMA IP
-%endfor
+  % endif
+  ## Any other type just gets ignored
+
+% endfor
 
 
-# Stuff we don't need, hopefully
-#  create_bd_addr_seg -range 0x00010000 -offset 0x80030000 [get_bd_addr_spaces zynq_ultra_ps_e_0/Data] [get_bd_addr_segs hls_target_0/s_axi_config/Reg] SEG_hls_target_0_Reg
+  # PASS 2: connect nodes (and configure DMA engines apppropriately)
+  ## We'll also use this to track how many IRQs we need
+  <% irqs = [] %>
+% for module in hw:
+  # Connect ${module['name']}
+  ## If the module connects to something, then connect it. :-)
+  % if module.has_key('outputto'):
+<%
+  targetmodule = module['outputto'].split('.')[0]
+  targets = [t for t in hw if t['name'] == targetmodule]
+  connection = targets[0]
+ %>
+    # First prepare the destination
+    % if connection['type'] == 'dma':
+      ## Configure the DMA S2MM channel
+  set_property -dict [list CONFIG.c_include_s2mm {1}] [get_bd_cells ${connection['name']}]
+  apply_bd_automation -rule xilinx.com:bd_rule:axi4 -config "Slave /zynq_ultra_ps_e_0/S_AXI_HPC0_FPD intc_ip /data_xconn Clk_xbar $dataclk Clk_master $dataclk Clk_slave $dataclk "  [get_bd_intf_pins ${connection['name']}/M_AXI_S2MM]
+  set dstpin ${connection['name']}/S_AXIS_S2MM
+  <% irqs.append(connection['name'] + "/s2mm_introut")  %>
+
+    % elif connection['type'] == 'hls':
+## HACK: just get the first input
+<%
+  streams = [s for s in connection['streams'] if s['type'] == 'input']
+  stream = streams[0]
+%>
+  set dstpin $${connection['name']}_${stream['name']}_connection
+    %endif
+    ## That's it; only HLS and DMA can take input
+
+    
+    % if module['type'] == 'dma':
+      ## Configure the DMA MM2S channel
+  set_property -dict [list CONFIG.c_include_mm2s {1} CONFIG.c_m_axis_mm2s_tdata_width {16}] [get_bd_cells ${module['name']}]
+  apply_bd_automation -rule xilinx.com:bd_rule:axi4 -config "Slave /zynq_ultra_ps_e_0/S_AXI_HPC0_FPD intc_ip /data_xconn Clk_xbar $dataclk Clk_master $dataclk Clk_slave $dataclk "  [get_bd_intf_pins ${module['name']}/M_AXI_MM2S]
+  set srcpin ${module['name']}/M_AXIS_MM2S
+  <% irqs.append(module['name'] + "/mm2s_introut")  %>
+
+    % elif module['type'] == 'hls':
+## HACK: just get the first output
+<%
+  streams = [s for s in module['streams'] if s['type'] == 'output']
+  stream = streams[0]
+%>
+  set srcpin $${module['name']}_${stream['name']}_connection
+
+    % elif module['type'] == 'csi':
+  set srcpin ${module['name']}_dwidth/M_AXIS
+    %endif
+
+  # Now make the actual connection
+  connect_bd_intf_net [get_bd_intf_pins $srcpin] [get_bd_intf_pins $dstpin]
+
+  % endif
+% endfor
 
 
-  # Create instance: ps8_0_axi_periph, and set properties
-  set ps8_0_axi_periph [ create_bd_cell -type ip -vlnv xilinx.com:ip:axi_interconnect:2.1 ps8_0_axi_periph ]
-  set_property -dict [ list \
-CONFIG.NUM_MI {5} \
- ] $ps8_0_axi_periph
+  # Connect the interrupts
+  set irqconcat [ create_bd_cell -type ip -vlnv xilinx.com:ip:xlconcat:2.1 irqconcat ]
+  set_property -dict [list CONFIG.NUM_PORTS {${len(irqs)}}] [get_bd_cells irqconcat]
+  connect_bd_net [get_bd_pins zynq_ultra_ps_e_0/pl_ps_irq0] [get_bd_pins irqconcat/dout]
 
-  # Create instance: rst_ps8_0_99M, and set properties
-  set rst_ps8_0_99M [ create_bd_cell -type ip -vlnv xilinx.com:ip:proc_sys_reset:5.0 rst_ps8_0_99M ]
-
-  # Create instance: xlconcat_0, and set properties
-  set xlconcat_0 [ create_bd_cell -type ip -vlnv xilinx.com:ip:xlconcat:2.1 xlconcat_0 ]
-
-  # Create instance: xlconstant_0, and set properties
-  set xlconstant_0 [ create_bd_cell -type ip -vlnv xilinx.com:ip:xlconstant:1.1 xlconstant_0 ]
-  set_property -dict [ list \
-CONFIG.CONST_VAL {2} \
-CONFIG.CONST_WIDTH {3} \
- ] $xlconstant_0
-
-  # Create interface connections
-  connect_bd_intf_net -intf_net axi_dma_0_M_AXI_MM2S [get_bd_intf_pins axi_dma_0/M_AXI_MM2S] [get_bd_intf_pins axi_interconnect_0/S01_AXI]
-  connect_bd_intf_net -intf_net axi_dma_0_M_AXI_S2MM [get_bd_intf_pins axi_dma_0/M_AXI_S2MM] [get_bd_intf_pins axi_interconnect_0/S02_AXI]
-  connect_bd_intf_net -intf_net axi_dma_0_M_AXI_SG [get_bd_intf_pins axi_dma_0/M_AXI_SG] [get_bd_intf_pins axi_interconnect_0/S00_AXI]
-  connect_bd_intf_net -intf_net axi_gpio_0_GPIO [get_bd_intf_ports dip_switches_8bits] [get_bd_intf_pins axi_gpio_0/GPIO]
-  connect_bd_intf_net -intf_net axi_gpio_2_GPIO [get_bd_intf_ports push_buttons_3bits] [get_bd_intf_pins axi_gpio_2/GPIO]
-  connect_bd_intf_net -intf_net axi_interconnect_0_M00_AXI [get_bd_intf_pins axi_interconnect_0/M00_AXI] [get_bd_intf_pins zynq_ultra_ps_e_0/S_AXI_HPC0_FPD]
-  connect_bd_intf_net -intf_net ps8_0_axi_periph_M00_AXI [get_bd_intf_pins axi_gpio_0/S_AXI] [get_bd_intf_pins ps8_0_axi_periph/M00_AXI]
-  connect_bd_intf_net -intf_net ps8_0_axi_periph_M01_AXI [get_bd_intf_pins axi_gpio_1/S_AXI] [get_bd_intf_pins ps8_0_axi_periph/M01_AXI]
-  connect_bd_intf_net -intf_net ps8_0_axi_periph_M02_AXI [get_bd_intf_pins axi_gpio_2/S_AXI] [get_bd_intf_pins ps8_0_axi_periph/M02_AXI]
-  connect_bd_intf_net -intf_net ps8_0_axi_periph_M03_AXI [get_bd_intf_pins axi_dma_0/S_AXI_LITE] [get_bd_intf_pins ps8_0_axi_periph/M03_AXI]
-  connect_bd_intf_net -intf_net zynq_ultra_ps_e_0_M_AXI_HPM0_LPD [get_bd_intf_pins ps8_0_axi_periph/S00_AXI] [get_bd_intf_pins zynq_ultra_ps_e_0/M_AXI_HPM0_LPD]
-
-  # Create port connections
-  connect_bd_net -net axi_dma_0_mm2s_introut [get_bd_pins axi_dma_0/mm2s_introut] [get_bd_pins xlconcat_0/In0]
-  connect_bd_net -net axi_dma_0_s2mm_introut [get_bd_pins axi_dma_0/s2mm_introut] [get_bd_pins xlconcat_0/In1]
-  connect_bd_net -net rst_ps8_0_99M_interconnect_aresetn [get_bd_pins axi_interconnect_0/ARESETN] [get_bd_pins ps8_0_axi_periph/ARESETN] [get_bd_pins rst_ps8_0_99M/interconnect_aresetn]
-  connect_bd_net -net rst_ps8_0_99M_peripheral_aresetn [get_bd_pins axi_dma_0/axi_resetn] [get_bd_pins axi_gpio_0/s_axi_aresetn] [get_bd_pins axi_gpio_1/s_axi_aresetn] [get_bd_pins axi_gpio_2/s_axi_aresetn] [get_bd_pins axi_interconnect_0/M00_ARESETN] [get_bd_pins axi_interconnect_0/S00_ARESETN] [get_bd_pins axi_interconnect_0/S01_ARESETN] [get_bd_pins axi_interconnect_0/S02_ARESETN] [get_bd_pins ps8_0_axi_periph/M00_ARESETN] [get_bd_pins ps8_0_axi_periph/M01_ARESETN] [get_bd_pins ps8_0_axi_periph/M02_ARESETN] [get_bd_pins ps8_0_axi_periph/M03_ARESETN] [get_bd_pins ps8_0_axi_periph/M04_ARESETN] [get_bd_pins ps8_0_axi_periph/S00_ARESETN] [get_bd_pins rst_ps8_0_99M/peripheral_aresetn]
-  connect_bd_net -net xlconcat_0_dout [get_bd_pins xlconcat_0/dout] [get_bd_pins zynq_ultra_ps_e_0/pl_ps_irq0]
-  connect_bd_net -net xlconstant_0_dout [get_bd_pins xlconstant_0/dout] [get_bd_pins zynq_ultra_ps_e_0/saxigp0_arprot]
-  connect_bd_net -net zynq_ultra_ps_e_0_pl_clk0 [get_bd_pins axi_dma_0/m_axi_mm2s_aclk] [get_bd_pins axi_dma_0/m_axi_s2mm_aclk] [get_bd_pins axi_dma_0/m_axi_sg_aclk] [get_bd_pins axi_dma_0/s_axi_lite_aclk] [get_bd_pins axi_gpio_0/s_axi_aclk] [get_bd_pins axi_gpio_1/s_axi_aclk] [get_bd_pins axi_gpio_2/s_axi_aclk] [get_bd_pins axi_interconnect_0/ACLK] [get_bd_pins axi_interconnect_0/M00_ACLK] [get_bd_pins axi_interconnect_0/S00_ACLK] [get_bd_pins axi_interconnect_0/S01_ACLK] [get_bd_pins axi_interconnect_0/S02_ACLK] [get_bd_pins ps8_0_axi_periph/ACLK] [get_bd_pins ps8_0_axi_periph/M00_ACLK] [get_bd_pins ps8_0_axi_periph/M01_ACLK] [get_bd_pins ps8_0_axi_periph/M02_ACLK] [get_bd_pins ps8_0_axi_periph/M03_ACLK] [get_bd_pins ps8_0_axi_periph/M04_ACLK] [get_bd_pins ps8_0_axi_periph/S00_ACLK] [get_bd_pins rst_ps8_0_99M/slowest_sync_clk] [get_bd_pins zynq_ultra_ps_e_0/maxihpm0_lpd_aclk] [get_bd_pins zynq_ultra_ps_e_0/pl_clk0] [get_bd_pins zynq_ultra_ps_e_0/saxihpc0_fpd_aclk]
-  connect_bd_net -net zynq_ultra_ps_e_0_pl_resetn0 [get_bd_pins rst_ps8_0_99M/ext_reset_in] [get_bd_pins zynq_ultra_ps_e_0/pl_resetn0]
-
-  # Create address segments
-  create_bd_addr_seg -range 0x80000000 -offset 0x00000000 [get_bd_addr_spaces axi_dma_0/Data_SG] [get_bd_addr_segs zynq_ultra_ps_e_0/SAXIGP0/HPC0_DDR_LOW] SEG_zynq_ultra_ps_e_0_HPC0_DDR_LOW
-  create_bd_addr_seg -range 0x80000000 -offset 0x00000000 [get_bd_addr_spaces axi_dma_0/Data_MM2S] [get_bd_addr_segs zynq_ultra_ps_e_0/SAXIGP0/HPC0_DDR_LOW] SEG_zynq_ultra_ps_e_0_HPC0_DDR_LOW
-  create_bd_addr_seg -range 0x80000000 -offset 0x00000000 [get_bd_addr_spaces axi_dma_0/Data_S2MM] [get_bd_addr_segs zynq_ultra_ps_e_0/SAXIGP0/HPC0_DDR_LOW] SEG_zynq_ultra_ps_e_0_HPC0_DDR_LOW
-  create_bd_addr_seg -range 0x20000000 -offset 0xC0000000 [get_bd_addr_spaces axi_dma_0/Data_SG] [get_bd_addr_segs zynq_ultra_ps_e_0/SAXIGP0/HPC0_QSPI] SEG_zynq_ultra_ps_e_0_HPC0_QSPI
-  create_bd_addr_seg -range 0x20000000 -offset 0xC0000000 [get_bd_addr_spaces axi_dma_0/Data_MM2S] [get_bd_addr_segs zynq_ultra_ps_e_0/SAXIGP0/HPC0_QSPI] SEG_zynq_ultra_ps_e_0_HPC0_QSPI
-  create_bd_addr_seg -range 0x20000000 -offset 0xC0000000 [get_bd_addr_spaces axi_dma_0/Data_S2MM] [get_bd_addr_segs zynq_ultra_ps_e_0/SAXIGP0/HPC0_QSPI] SEG_zynq_ultra_ps_e_0_HPC0_QSPI
-  create_bd_addr_seg -range 0x00010000 -offset 0x80040000 [get_bd_addr_spaces zynq_ultra_ps_e_0/Data] [get_bd_addr_segs axi_dma_0/S_AXI_LITE/Reg] SEG_axi_dma_0_Reg
-  create_bd_addr_seg -range 0x00010000 -offset 0x80000000 [get_bd_addr_spaces zynq_ultra_ps_e_0/Data] [get_bd_addr_segs axi_gpio_0/S_AXI/Reg] SEG_axi_gpio_0_Reg
-  create_bd_addr_seg -range 0x00010000 -offset 0x80010000 [get_bd_addr_spaces zynq_ultra_ps_e_0/Data] [get_bd_addr_segs axi_gpio_1/S_AXI/Reg] SEG_axi_gpio_1_Reg
-  create_bd_addr_seg -range 0x00010000 -offset 0x80020000 [get_bd_addr_spaces zynq_ultra_ps_e_0/Data] [get_bd_addr_segs axi_gpio_2/S_AXI/Reg] SEG_axi_gpio_2_Reg
-
-  # Exclude Address Segments
-  create_bd_addr_seg -range 0x01000000 -offset 0xFF000000 [get_bd_addr_spaces axi_dma_0/Data_MM2S] [get_bd_addr_segs zynq_ultra_ps_e_0/SAXIGP0/HPC0_LPS_OCM] SEG_zynq_ultra_ps_e_0_HPC0_LPS_OCM
-  exclude_bd_addr_seg [get_bd_addr_segs axi_dma_0/Data_MM2S/SEG_zynq_ultra_ps_e_0_HPC0_LPS_OCM]
-
-  create_bd_addr_seg -range 0x01000000 -offset 0xFF000000 [get_bd_addr_spaces axi_dma_0/Data_S2MM] [get_bd_addr_segs zynq_ultra_ps_e_0/SAXIGP0/HPC0_LPS_OCM] SEG_zynq_ultra_ps_e_0_HPC0_LPS_OCM
-  exclude_bd_addr_seg [get_bd_addr_segs axi_dma_0/Data_S2MM/SEG_zynq_ultra_ps_e_0_HPC0_LPS_OCM]
-
-  create_bd_addr_seg -range 0x01000000 -offset 0xFF000000 [get_bd_addr_spaces axi_dma_0/Data_SG] [get_bd_addr_segs zynq_ultra_ps_e_0/SAXIGP0/HPC0_LPS_OCM] SEG_zynq_ultra_ps_e_0_HPC0_LPS_OCM
-  exclude_bd_addr_seg [get_bd_addr_segs axi_dma_0/Data_SG/SEG_zynq_ultra_ps_e_0_HPC0_LPS_OCM]
-
-
-
-  # Restore current instance
-  current_bd_instance $oldCurInst
+% for irq in irqs:
+  connect_bd_net [get_bd_pins ${irq}] [get_bd_pins irqconcat/In${loop.index}]
+% endfor
 
   save_bd_design
 }
@@ -667,18 +667,24 @@ CONFIG.CONST_WIDTH {3} \
 create_root_design
 
 # Create the HDL wrapper
-# FIXME: relative path
-make_wrapper -files [get_files /nobackup/sebell/work/ultrazed/ultrazynqbuilder/hw/uzb_test/uzb_test.srcs/sources_1/bd/design_1/design_1.bd] -top
+set wrapper [make_wrapper -files [get_files $project_dir/$project_name.srcs/sources_1/bd/$bd_name/$bd_name.bd] -top]
+add_files -norecurse $wrapper
 update_compile_order -fileset sources_1
 
-# Adds the constraint file that details the pins the DP clocks come in on
-add_files -fileset constrs_1 -norecurse <PWD>/source_files/uz3eg_iocc_dp_es1.xdc
+# Adds the constraint files
+% if board == 'iocc':
+import_files -fileset constrs_1 -norecurse ${pwd}/constrs/dpclock_iocc.xdc
+# User will have to desicde what to do with I2C and GPIO
+% elif board == 'pciecc':
+import_files -fileset constrs_1 -norecurse ${pwd}/constrs/dpclock_pciecc.xdc
+import_files -fileset constrs_1 -norecurse ${pwd}/constrs/csimodules.xdc
+% endif
 
 # Kicks off the bitstream generation
-launch_runs impl_1 -to_step write_bitstream -jobs 12
-wait_on_run impl_1
-
-#Exports the hdf file
-file mkdir <PWD>/uz3eg_iocc_dp/uz3eg_iocc_dp.sdk
-file copy -force <PWD>/uz3eg_iocc_dp/uz3eg_iocc_dp.runs/impl_1/uz3eg_iocc_dp_wrapper.sysdef <PWD>/uz3eg_iocc_dp/uz3eg_iocc_dp.sdk/uz3eg_iocc_dp_wrapper.hdf
+# launch_runs impl_1 -to_step write_bitstream -jobs 12
+# wait_on_run impl_1
+# 
+# #Exports the hdf file
+# file mkdir <PWD>/uz3eg_iocc_dp/uz3eg_iocc_dp.sdk
+# file copy -force <PWD>/uz3eg_iocc_dp/uz3eg_iocc_dp.runs/impl_1/uz3eg_iocc_dp_wrapper.sysdef <PWD>/uz3eg_iocc_dp/uz3eg_iocc_dp.sdk/uz3eg_iocc_dp_wrapper.hdf
 

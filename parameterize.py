@@ -10,6 +10,7 @@ import mako.template
 import mako.exceptions
 import time
 from sys import argv
+from os import getcwd
 from IPython import embed
 
 if len(argv) < 3:
@@ -32,6 +33,7 @@ params = yaml.load(open(paramFile))
 params['toolName'] = "parameterize.py"
 params['cmdline'] = ' '.join(argv)
 params['date'] = time.asctime()
+params['pwd'] = getcwd()
 
 # Calculate some parameters from the file to make things easier inside
 # # the templates
