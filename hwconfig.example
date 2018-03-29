@@ -3,13 +3,27 @@
 # See doc/parameterization.md for more details
 
 name: example
-use_displayport: y
-use_csi_camera: [n, n, n, n]
+productionsilicon: y
+board: pciecc
 
-# If no inputs or outputs are specified, they are implicitly hooked up to a DMA engine
+# This example specifies two paths: One which processes data directly from a
+# CSI receiver, and one which processes images in DRAM via DMA.  Both return
+# the images to DRAM using DMA.
 hw:
+- type: dma
+  name: dma0
+  outputto: canny
 - type: hls
   name: canny
   path: /nobackup/sebell/work/ultrazed/ip_repo/xilinx_com_hls_hls_target_1_0/
-
-
+  outputto: dma0
+- type: csi
+  name: cam0
+  path: /nobackup/sebell/work/ultrazed/ip_repo/vlsiweb.stanford.edu_csi_axi_csi_1.0/
+  outputto: demosaic0
+- type: hls
+  name: demosaic0
+  path: /nobackup/sebell/work/ultrazed/ip_repo/xilinx_com_hls_hls_target_1_0/
+  outputto: dma1
+- type: dma
+  name: dma1

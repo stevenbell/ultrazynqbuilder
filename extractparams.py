@@ -12,6 +12,9 @@ params = yaml.load(open(inpath))
 
 # Find any hardware accelerators
 for accelerator in params['hw']:
+  if accelerator['type'] != 'hls':
+    continue
+
   print "Extracting parameters for " + accelerator['name']
   accelerator['streams'] = [] # Start empty list of data streams
 
