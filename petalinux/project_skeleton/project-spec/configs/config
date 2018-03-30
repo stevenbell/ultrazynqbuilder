@@ -172,7 +172,7 @@ CONFIG_SUBSYSTEM_ENDIAN_LITTLE=y
 # Kernel Bootargs
 #
 # CONFIG_SUBSYSTEM_BOOTARGS_AUTO is not set
-CONFIG_SUBSYSTEM_USER_CMDLINE="earlycon=cdns,mmio,0xFF000000,115200n8 root=/dev/mmcblk1p2 rw rootwait cma=1024M"
+CONFIG_SUBSYSTEM_USER_CMDLINE="earlycon=cdns,mmio,0xFF000000,115200n8 root=/dev/mmcblk1p2 rw rootwait cma=256m"
 
 #
 # ARM Trusted Firmware Compilation Configuration
@@ -208,8 +208,7 @@ CONFIG_SUBSYSTEM_ROOTFS_SD=y
 CONFIG_SUBSYSTEM_SDROOT_DEV="/dev/mmcblk1p2"
 CONFIG_SUBSYSTEM_UIMAGE_NAME="image.ub"
 CONFIG_SUBSYSTEM_DTB_PADDING_SIZE=0x1000
-CONFIG_SUBSYSTEM_COPY_TO_TFTPBOOT=y
-CONFIG_SUBSYSTEM_TFTPBOOT_DIR="/tftpboot"
+# CONFIG_SUBSYSTEM_COPY_TO_TFTPBOOT is not set
 
 #
 # Firmware Version Configuration
@@ -230,11 +229,7 @@ CONFIG_SUBSYSTEM_MACHINE_NAME="template"
 #
 # TMPDIR Location
 #
-<<<<<<< Updated upstream:build/source_files/project-spec/configs/config
-CONFIG_TMP_DIR_LOCATION="/nobackup/wcheng90/ultrazed-displayport-avnet/petalinux/projects/uz3eg_iocc_dp_2017_2/build/tmp"
-=======
-CONFIG_TMP_DIR_LOCATION="build/tmp"
->>>>>>> Stashed changes:petalinux/project-spec/configs/config
+CONFIG_TMP_DIR_LOCATION="<PETALINUX_PROJECT_ROOT>/build/tmp"
 
 #
 # Parallel thread execution
