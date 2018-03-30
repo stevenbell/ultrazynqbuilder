@@ -48,3 +48,10 @@ for m in `echo 'sys dev proc'`; do sudo umount $TARGET/$m; done
 rm $TARGET/etc/resolv.conf
 rm $TARGET/configurecore.sh
 
+# Configure networking for device
+# This overwrites the file we made for the chroot
+echo "auto lo" > /etc/network/interfaces
+echo "iface lo inet loopback" >> /etc/network/interfaces
+echo "auto eth0" >> /etc/network/interfaces
+echo "iface eth0 inet dhcp" >> /etc/network/interfaces
+

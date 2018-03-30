@@ -27,8 +27,17 @@ Import the HDF:
   `petalinux-config --get-hw-description <hdf path> -p <path to the project you created in 1>`
 
 Configure the project
-  -> Boot args?
-  -> Root filesystem on SD card
+  -> Set boot args: Main->Kernel Bootargs
+"earlycon=cdns,mmio,0xFF000000,115200n8 root=/dev/mmcblk1p2 rw rootwait cma=256m"
+  -> Put the root filesystem on SD card: Main->Image Packaging Configuration->Root fs type
+  -> Change device node to /dev/mmcblk1p2
+
+Configure the kernel
+  `petalinux-config -c kernel -p <path to project>`
+  -> Disable ramdisk support (optimization; shouldn't be necessary): General setup
+  -> Disaple PCI support (optimization; shouldn't be necessary): Bus Support
+  -> Set boot args (why is this necessary?): Boot options
+  -> Enable CMA debugfs (useful for debugging): Kernel features > CMA
 
 Build it
   `cd <PROJECT>`
