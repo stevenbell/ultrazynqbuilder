@@ -16,5 +16,11 @@ At the moment, this supports only the UltraZed-EG with the PCIe carrier card.
 Currently supported version of Vivado is 2017.2.
 
 # Build flow
-1. (Optional) Create a hardware accelerator with Halide, and ensure that HLS has packaged it as an IP core.
+1. (Optional) Create one or more hardware accelerators with Halide, and ensure that HLS has packaged them as IP cores.
+2. Copy `hwconfig.example` to `hwconfig.user` and edit it to specify the design you want.
+3. Run `python extractparams.py` to extract the parameters from the IP cores and place them in the configuration file.
+4. In the `hw` directory, run `python parameterize.py ../hwconfig.all mkproject.tcl.mako:mkproject.tcl` to generate a Tcl script that will create the design.
+5. Open Vivado and in the Tcl console run `source mkproject.tcl`
+
+The design will be created, and Vivado should produce a bitstream.  From here you can use the petalinux build script to create the boot collateral.
 
