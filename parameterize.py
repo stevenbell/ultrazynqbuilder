@@ -11,7 +11,7 @@ import mako.exceptions
 import time
 from sys import argv
 from os import getcwd
-from IPython import embed
+#from IPython import embed
 
 if len(argv) < 3:
   print "USAGE: parameterize.py HWCONFIG SRCFILE:DSTFILE [ADDITIONAL:FILES]"
@@ -39,11 +39,11 @@ params['pwd'] = getcwd()
 # # the templates
 # if not params.has_key('taps') or params['taps'] == None:
 #   params['taps'] = []
-# 
+#
 # offsets = [0]
 # for t in params['taps']:
 #   offsets.append(offsets[-1] + int(t['width'])*int(t['height'])*int(t['depth']))
-# 
+#
 # params['tapoffsets'] = offsets
 # params['regwidth'] = int(params['controlregs']) + offsets[-1]
 
