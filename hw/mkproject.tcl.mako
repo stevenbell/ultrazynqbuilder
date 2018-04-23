@@ -453,6 +453,10 @@ CONFIG.C_GPIO_WIDTH {3} \
   # 2) Connect the nodes, now that everything exists
 
   # PASS 1: instantiate and configure nodes
+  ##
+  ## We'll use this to track how many IRQs we need, and handle them at the end
+  <% irqs = [] %>
+
 % for module in hw:
   % if module['type'] == 'csi':
 
@@ -468,7 +472,11 @@ CONFIG.C_GPIO_WIDTH {3} \
     CONFIG.DATA_LANE2_BYTE {All_Byte} \
     CONFIG.DATA_LANE3_BYTE {All_Byte} \
     CONFIG.SupportLevel {1} \
+    CONFIG.CLK_LANE_IO_LOC {${module['clk_loc']}} \
+    CONFIG.DATA_LANE0_IO_LOC {${module['data0_loc']}} \
+    CONFIG.DATA_LANE1_IO_LOC {${module['data1_loc']}} \
      ] $${module['name']}_dphy
+## TODO: to save resources, we could not put the PLL in each dphy block
 
   # Connect clk and reset
   connect_bd_net [get_bd_pins ${module['name']}_dphy/core_clk] [get_bd_pins zynq_ultra_ps_e_0/pl_clk2]
@@ -481,15 +489,17 @@ CONFIG.C_GPIO_WIDTH {3} \
   set ${module['name']}_dphy_data_rxn [ create_bd_port -dir I -from 1 -to 0 ${module['name']}_dphy_data_rxn ]
   set ${module['name']}_dphy_data_rxp [ create_bd_port -dir I -from 1 -to 0 ${module['name']}_dphy_data_rxp ]
 
-  connect_bd_net -net clk_rxn_1 [get_bd_ports ${module['name']}_dphy_clk_rxn] [get_bd_pins ${module['name']}_dphy/clk_rxn]
-  connect_bd_net -net clk_rxp_1 [get_bd_ports ${module['name']}_dphy_clk_rxp] [get_bd_pins ${module['name']}_dphy/clk_rxp]
-  connect_bd_net -net data_rxn_1 [get_bd_ports ${module['name']}_dphy_data_rxn] [get_bd_pins ${module['name']}_dphy/data_rxn]
-  connect_bd_net -net data_rxp_1 [get_bd_ports ${module['name']}_dphy_data_rxp] [get_bd_pins ${module['name']}_dphy/data_rxp]
+  connect_bd_net [get_bd_ports ${module['name']}_dphy_clk_rxn] [get_bd_pins ${module['name']}_dphy/clk_rxn]
+  connect_bd_net [get_bd_ports ${module['name']}_dphy_clk_rxp] [get_bd_pins ${module['name']}_dphy/clk_rxp]
+  connect_bd_net [get_bd_ports ${module['name']}_dphy_data_rxn] [get_bd_pins ${module['name']}_dphy/data_rxn]
+  connect_bd_net [get_bd_ports ${module['name']}_dphy_data_rxp] [get_bd_pins ${module['name']}_dphy/data_rxp]
 
   # Create the csirx module
   set_property ip_repo_paths "${module['path']} [get_property  ip_repo_paths [current_project]]" [current_project]
   update_ip_catalog  
-  set ${module['name']}_csirx [ create_bd_cell -type ip -vlnv vlsiweb.stanford.edu:csi:axi_csi:1.0 ${module['name']}_csirx ]
+  set ${module['name']}_csirx [ create_bd_cell -type ip -vlnv ${module['vlnv']} ${module['name']}_csirx ]
+
+  <% irqs.append(module['name'] + "_csirx/csi_intr")  %>
 
   # Create reset for the byte clock
   set ${module['name']}_reset [ create_bd_cell -type ip -vlnv xilinx.com:ip:proc_sys_reset:5.0 ${module['name']}_reset ]
@@ -497,19 +507,19 @@ CONFIG.C_GPIO_WIDTH {3} \
   connect_bd_net [get_bd_pins ${module['name']}_reset/ext_reset_in] [get_bd_pins zynq_ultra_ps_e_0/pl_resetn0]
 
   # Connect byte clock and reset for csirx
-  connect_bd_net [get_bd_pins ${module['name']}_dphy/rxbyteclkhs] [get_bd_pins ${module['name']}_csirx/rxbyteclkhs]
+  connect_bd_net [get_bd_pins ${module['name']}_dphy/rxbyteclkhs] [get_bd_pins ${module['name']}_csirx/ppi_rxbyteclkhs_clk]
   connect_bd_net [get_bd_pins ${module['name']}_csirx/rxbyteclkhs_resetn] [get_bd_pins ${module['name']}_reset/peripheral_aresetn]
 
   # Connect AXI-lite for csirx
-  apply_bd_automation -rule xilinx.com:bd_rule:axi4 -config "Master /zynq_ultra_ps_e_0/M_AXI_HPM0_LPD intc_ip /control_xconn Clk_xbar Auto Clk_master $controlclk Clk_slave $controlclk "  [get_bd_intf_pins ${module['name']}_csirx/S00_AXI]
+  apply_bd_automation -rule xilinx.com:bd_rule:axi4 -config "Master /zynq_ultra_ps_e_0/M_AXI_HPM0_LPD intc_ip /control_xconn Clk_xbar Auto Clk_master $controlclk Clk_slave $controlclk "  [get_bd_intf_pins ${module['name']}_csirx/RegSpace_S_AXI]
 
   # And connect the PPI
-  connect_bd_intf_net [get_bd_intf_pins ${module['name']}_dphy/rx_mipi_ppi_if] [get_bd_intf_pins ${module['name']}_csirx/PPI_IN]
+  connect_bd_intf_net [get_bd_intf_pins ${module['name']}_dphy/rx_mipi_ppi_if] [get_bd_intf_pins ${module['name']}_csirx/rx_mipi_ppi_if_1]
 
   # Connect FIFO to handle clock crossing
   set ${module['name']}_fifo [ create_bd_cell -type ip -vlnv xilinx.com:ip:axis_data_fifo:1.1 ${module['name']}_fifo ]
   set_property -dict [list CONFIG.FIFO_DEPTH {256} CONFIG.IS_ACLK_ASYNC {1} ] $${module['name']}_fifo
-  connect_bd_intf_net [get_bd_intf_pins ${module['name']}_fifo/S_AXIS] [get_bd_intf_pins ${module['name']}_csirx/AXIS_OUT]
+  connect_bd_intf_net [get_bd_intf_pins ${module['name']}_fifo/S_AXIS] [get_bd_intf_pins ${module['name']}_csirx/Output_M_AXIS]
 
   connect_bd_net [get_bd_pins ${module['name']}_fifo/s_axis_aclk] [get_bd_pins ${module['name']}_dphy/rxbyteclkhs]
   connect_bd_net [get_bd_pins ${module['name']}_fifo/s_axis_aresetn] [get_bd_pins ${module['name']}_reset/peripheral_aresetn]
@@ -598,8 +608,6 @@ CONFIG.c_sg_include_stscntrl_strm {0} \
 
 
   # PASS 2: connect nodes (and configure DMA engines apppropriately)
-  ## We'll also use this to track how many IRQs we need
-  <% irqs = [] %>
 % for module in hw:
   # Connect ${module['name']}
   ## If the module connects to something, then connect it. :-)
