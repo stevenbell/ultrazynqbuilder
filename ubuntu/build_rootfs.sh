@@ -1,4 +1,4 @@
-#! /bin/bash
+#! /bin/bash -e
 
 # Build a minimal Ubuntu root file system for Zynq boards
 # This installs a handful of packages that make life on the board easier,
@@ -20,10 +20,12 @@ TARGET=/media/steven/ROOT
 
 # Get the Ubuntu core filesystem
 RELNAME=ubuntu-base-$MINOR-base-$ARCH.tar.gz
-#wget http://cdimage.ubuntu.com/ubuntu-base/releases/$RELEASE/release/$RELNAME
+if [ ! -e $RELNAME ]; then
+    wget http://cdimage.ubuntu.com/ubuntu-base/releases/$RELEASE/release/$RELNAME
+fi
 
 # Extract it to the target directory
-#tar -xf $RELNAME --directory=$TARGET
+tar -xf $RELNAME --directory=$TARGET
 
 # Set up networking for the chroot
 mkdir -p $TARGET/etc/network
@@ -31,6 +33,11 @@ cp /etc/network/interfaces $TARGET/etc/network
 cp /etc/resolv.conf $TARGET/etc/resolv.conf
 
 # Copy qemu-arm-static
+# Before copy, make sure the user has it installed
+# -e will make sure to stop at $?==1
+dpkg -s qemu-user-static > /dev/null
+dpkg -s qemu-system-arm > /dev/null
+
 # This is necessary for running arm binaries once we chroot
 cp /usr/bin/qemu-arm-static $TARGET/usr/bin/
 cp /usr/bin/qemu-aarch64-static $TARGET/usr/bin/
@@ -50,8 +57,8 @@ rm $TARGET/configurecore.sh
 
 # Configure networking for device
 # This overwrites the file we made for the chroot
-echo "auto lo" > /etc/network/interfaces
-echo "iface lo inet loopback" >> /etc/network/interfaces
-echo "auto eth0" >> /etc/network/interfaces
-echo "iface eth0 inet dhcp" >> /etc/network/interfaces
+echo "auto lo" > $TARGET/etc/network/interfaces
+echo "iface lo inet loopback" >> $TARGET/etc/network/interfaces
+echo "auto eth0" >> $TARGET/etc/network/interfaces
+echo "iface eth0 inet dhcp" >> $TARGET/etc/network/interfaces
 

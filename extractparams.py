@@ -3,7 +3,7 @@
 
 import yaml
 from lxml import etree
-from IPython import embed
+#from IPython import embed
 
 inpath = 'hwconfig.user'
 outpath = 'hwconfig.all'
