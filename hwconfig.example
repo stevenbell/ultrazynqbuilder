@@ -17,9 +17,20 @@ hw:
   name: canny
   path: /nobackup/sebell/work/ultrazed/ip_repo/xilinx_com_hls_hls_target_1_0/
   outputto: dma0
+
+# The IO pin locations must be specified for the CSI board
+# Valid combinations are:
+# AB6 / AD8 / AE7
+# AD4 / AD1 / AE4
+# W4 / W1 / AA4
+# R2 / U1 / N1
+
 - type: csi
   name: cam0
-  path: /nobackup/sebell/work/ultrazed/ip_repo/vlsiweb.stanford.edu_csi_axi_csi_1.0/
+  clk_loc: AB6
+  data0_loc: AD8
+  data1_loc: AE7
+  path: /nobackup/sebell/work/ultrazed/ip_repo/vlsiweb.stanford.edu_csi_axi_csi_1.1/
   outputto: demosaic0
 - type: hls
   name: demosaic0

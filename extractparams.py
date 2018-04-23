@@ -1,6 +1,7 @@
 # Read the user parameters file (usually hwconfig.user) and extract
-# parameters for all of the Halide-HLS accelerators specified there.
+# parameters for all of the user-defined modules specified there.
 
+import os
 import yaml
 from lxml import etree
 #from IPython import embed
@@ -10,20 +11,24 @@ outpath = 'hwconfig.all'
 
 params = yaml.load(open(inpath))
 
-# Find any hardware accelerators
-for accelerator in params['hw']:
-  if accelerator['type'] != 'hls':
+for module in params['hw']:
+  if module['type'] == 'dma':
+    # Xilinx provided stuff doesn't need probing
     continue
 
-  print "Extracting parameters for " + accelerator['name']
-  accelerator['streams'] = [] # Start empty list of data streams
+  if not os.path.isdir(module['path']):
+    print "[Error] Couldn't find IP for %s in %s!" % (module['name'], module['path'])
+    continue
 
-  desc = etree.parse(open(accelerator['path']+'/component.xml'))
+  print "Extracting parameters for " + module['name']
+  module['streams'] = [] # Start empty list of data streams
+
+  desc = etree.parse(open(module['path']+'/component.xml'))
   # Have to pass the namespace mappings, or lxml chokes
   ns = desc.getroot().nsmap
 
   # Create the VLNV (formal Xilinx name: vendor-library-name-version)
-  accelerator['vlnv'] = \
+  module['vlnv'] = \
     str(desc.xpath('/spirit:component/spirit:vendor/text()', namespaces=ns)[0]) + ":" + \
     str(desc.xpath('/spirit:component/spirit:library/text()', namespaces=ns)[0]) + ":" + \
     str(desc.xpath('/spirit:component/spirit:name/text()', namespaces=ns)[0]) +  ":" +\
@@ -41,9 +46,13 @@ for accelerator in params['hw']:
     else:
       stream['type'] = 'unknown' # We're in serious trouble...
 
-    stream['depth'] = int(iface.xpath('.//spirit:parameter[spirit:name="TDATA_NUM_BYTES"]/spirit:value/text()', namespaces=ns)[0])
+    streamdepths = iface.xpath('.//spirit:parameter[spirit:name="TDATA_NUM_BYTES"]/spirit:value/text()', namespaces=ns)
+    if len(streamdepths) == 1:
+      stream['depth'] = int(streamdepths[0])
+    else:
+      print "[Warning] Failed to get stream depth for stream %s" % stream['name']
 
-    accelerator['streams'].append(stream)
+    module['streams'].append(stream)
 
 outfile = open(outpath, 'w')
 outfile.write(yaml.dump(params))
