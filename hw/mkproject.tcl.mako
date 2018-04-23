@@ -276,8 +276,11 @@ CONFIG.PSU__DDRC__T_RP {15} \
 CONFIG.PSU__DDRC__VREF {1} \
 CONFIG.PSU__DISPLAYPORT__PERIPHERAL__ENABLE {1} \
 CONFIG.PSU__DPAUX__PERIPHERAL__IO {MIO 27 .. 30} \
-## TODO: make this "Dual Higher" for iocc
+% if board == 'iocc':
+CONFIG.PSU__DP__LANE_SEL {Dual Higher} \
+% elif board == 'pciecc':
 CONFIG.PSU__DP__LANE_SEL {Single Higher} \
+% endif
 CONFIG.PSU__DP__REF_CLK_FREQ {27} \
 CONFIG.PSU__DP__REF_CLK_SEL {Ref Clk3} \
 CONFIG.PSU__ENET3__GRP_MDIO__ENABLE {1} \
@@ -390,9 +393,6 @@ CONFIG.PSU__USE__VIDEO {1} \
   connect_bd_net [get_bd_pins data_xconn/aresetn] [get_bd_pins clk1_reset/interconnect_aresetn]
 
   # Add GPIO for LEDs and camera enable lines
-  set led_8bits [ create_bd_intf_port -mode Master -vlnv xilinx.com:interface:gpio_rtl:1.0 led_8bits ]
-  set CAM_GPIO [ create_bd_intf_port -mode Master -vlnv xilinx.com:interface:gpio_rtl:1.0 CAM_GPIO ]
-
   set axi_gpio_0 [ create_bd_cell -type ip -vlnv xilinx.com:ip:axi_gpio:2.0 axi_gpio_0 ]
   set_property -dict [ list \
 CONFIG.C_IS_DUAL {1} \
@@ -403,8 +403,15 @@ CONFIG.C_GPIO2_WIDTH {4} \
 CONFIG.GPIO_BOARD_INTERFACE {led_8bits} \
  ] $axi_gpio_0
 
+  set led_8bits [ create_bd_intf_port -mode Master -vlnv xilinx.com:interface:gpio_rtl:1.0 led_8bits ]
   connect_bd_intf_net -intf_net axi_gpio_0_GPIO [get_bd_intf_ports led_8bits] [get_bd_intf_pins axi_gpio_0/GPIO]
+
+% if board == 'pciecc':
+  set CAM_GPIO [ create_bd_intf_port -mode Master -vlnv xilinx.com:interface:gpio_rtl:1.0 CAM_GPIO ]
   connect_bd_intf_net -intf_net axi_gpio_0_GPIO2 [get_bd_intf_ports CAM_GPIO] [get_bd_intf_pins axi_gpio_0/GPIO2]
+% else:
+  set_property -dict [list CONFIG.C_IS_DUAL {0}] $axi_gpio_0
+%endif
 
   # Automagically connect to control bus
   apply_bd_automation -rule xilinx.com:bd_rule:axi4 -config "Master /zynq_ultra_ps_e_0/M_AXI_HPM0_LPD intc_ip /control_xconn Clk_xbar Auto Clk_master $controlclk Clk_slave $controlclk "  [get_bd_intf_pins axi_gpio_0/S_AXI]
@@ -422,12 +429,13 @@ CONFIG.C_GPIO_WIDTH {3} \
 
   apply_bd_automation -rule xilinx.com:bd_rule:axi4 -config "Master /zynq_ultra_ps_e_0/M_AXI_HPM0_LPD intc_ip /control_xconn Clk_xbar Auto Clk_master $controlclk Clk_slave $controlclk "  [get_bd_intf_pins axi_gpio_1/S_AXI]
 
-
+% if board == 'pciecc':
   # Add I2C controller for cameras (and other I2C stuff on the FMC)
   set FMC_IIC [ create_bd_intf_port -mode Master -vlnv xilinx.com:interface:iic_rtl:1.0 FMC_IIC ]
   set camera_iic [ create_bd_cell -type ip -vlnv xilinx.com:ip:axi_iic:2.0 camera_iic ]
   connect_bd_intf_net -intf_net camera_iic_IIC [get_bd_intf_ports FMC_IIC] [get_bd_intf_pins camera_iic/IIC]
   apply_bd_automation -rule xilinx.com:bd_rule:axi4 -config "Master /zynq_ultra_ps_e_0/M_AXI_HPM0_LPD intc_ip /control_xconn Clk_xbar Auto Clk_master $controlclk Clk_slave $controlclk"  [get_bd_intf_pins camera_iic/S_AXI]
+% endif
 
 
   # Set up the DisplayPort connections
@@ -680,11 +688,12 @@ import_files -fileset constrs_1 -norecurse ${pwd}/constrs/dpclock_pciecc.xdc
 import_files -fileset constrs_1 -norecurse ${pwd}/constrs/csimodules.xdc
 % endif
 
-# Kicks off the bitstream generation
-# launch_runs impl_1 -to_step write_bitstream -jobs 12
-# wait_on_run impl_1
-# 
-# #Exports the hdf file
-# file mkdir <PWD>/uz3eg_iocc_dp/uz3eg_iocc_dp.sdk
-# file copy -force <PWD>/uz3eg_iocc_dp/uz3eg_iocc_dp.runs/impl_1/uz3eg_iocc_dp_wrapper.sysdef <PWD>/uz3eg_iocc_dp/uz3eg_iocc_dp.sdk/uz3eg_iocc_dp_wrapper.hdf
+# Kick off the bitstream generation
+launch_runs impl_1 -to_step write_bitstream -jobs 12
+wait_on_run impl_1
+
+# Export the hdf file
+file mkdir ./${name}/${name}.sdk
+## This requires a little hackery since ${ will get picked up by Mako
+file copy -force ./${name}/${name}.runs/impl_1/<%text>${bd_name}</%text>_wrapper.sysdef ./${name}/${name}.sdk/
 
