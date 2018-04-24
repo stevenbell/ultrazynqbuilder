@@ -19,7 +19,6 @@
 #include <asm/io.h> // ioremap and friends
 #include <asm/uaccess.h> // Copy to/from userspace pointers
 #include <asm/cacheflush.h> // flush L1 cache
-#include <asm/outercache.h> // flush L2 cache
 #include <linux/sched.h> // current task struct
 #include <linux/fs.h> // File node numbers
 #include <linux/device.h>
@@ -579,8 +578,6 @@ static int hwacc_probe(struct platform_device *pdev)
 {
   int irqok;
   struct resource* r_irq = NULL;
-	struct resource *r_mem; /* IO mem resources */
-	struct device *dev = &pdev->dev;
 
   // TODO: this is pretty fragile, as it relies on the ordering in the device
   // tree.  It might be better to break them out in the device tree.

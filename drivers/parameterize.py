@@ -10,7 +10,7 @@ import mako.template
 import mako.exceptions
 import time
 from sys import argv
-from IPython import embed
+#from IPython import embed
 
 if len(argv) < 3:
   print "USAGE: parameterize.py HWCONFIG SRCFILE:DSTFILE [ADDITIONAL:FILES]"
