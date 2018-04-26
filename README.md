@@ -8,10 +8,11 @@ This is one backend designed to be used with f4graph and Halide-HLS.
 - **drivers**: Kernel drivers for pushing images through accelerators created with Halide-HLS.
 - **hwutils**: tcl scripts and other utilities that we've created for debugging and testing FPGA designs.
 - **petalinux**: petalinux project for building all the boot collateral.
+- **realtime**: Real-time code for controlling cameras and hardware accelerators, which interfaces with the f4graph runtime.
 - **doc**: various bits of documentation and notes.
 
 # Supported devices
-At the moment, this supports only the UltraZed-EG with the PCIe carrier card.
+At the moment, this supports the UltraZed-EG with either the IO carrier card or the PCIe carrier card.
 
 Currently supported version of Vivado is 2017.2.
 
