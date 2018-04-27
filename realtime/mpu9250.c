@@ -21,5 +21,20 @@ s16 mpu_read_reg16(u8 addr)
 }
 
 
+  // Test the IMU
+  /*
+  while(1){
+    s16 accX = mpu_read_reg16(MPU_ACC_X);
+    s16 accY = mpu_read_reg16(MPU_ACC_Y);
+    s16 accZ = mpu_read_reg16(MPU_ACC_Z);
+
+    s16 gyroX = mpu_read_reg16(MPU_GYRO_X);
+    s16 gyroY = mpu_read_reg16(MPU_GYRO_Y);
+    s16 gyroZ = mpu_read_reg16(MPU_GYRO_Z);
+
+    printf("Acc X %5d  Y %5d  Z %5d    Gyro X %5d  Y %5d  Z %5d\n",
+           accX, accY, accZ, gyroX, gyroY, gyroZ);
+  }
+  */
 
 

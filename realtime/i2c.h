@@ -11,5 +11,7 @@
 
 #define I2C_MUX_ADDR	0x70 // 0b1110000 [R/W]
 
+
+unsigned int i2c_write(u8 addr, u8 data[], unsigned int len);
 void i2c_set_mux(u8 channel);
 

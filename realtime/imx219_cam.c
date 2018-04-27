@@ -48,7 +48,8 @@ void imx219_cam_init(void)
   usleep(1000);
 
   // Set all the configuration registers
-  for(int i = 0; i < COMMANDS_LEN; i++){
+  // The sequence is terminated with an arry of all zeros
+  for(int i = 0; byte_strings[i][0] > 0; i++){
     uint8_t* tx_bytes = byte_strings[i];
     int tx_len = tx_bytes[0]; // First byte is the length
     XIic_Send(I2C_BASEADDR, I2C_CAM_ADDR, tx_bytes+1, tx_len, XIIC_STOP);

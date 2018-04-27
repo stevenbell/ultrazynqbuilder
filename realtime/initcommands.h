@@ -1,6 +1,5 @@
-int COMMANDS_LEN = 72;
 
-uint8_t byte_strings[][5] = { // 72 lines
+uint8_t byte_strings[][5] = {
 {3,0x01,0x03,0x01,0}, // SW_RESET
 {3,0x01,0x00,0x00,0}, // MODE_SEL: standby
 {3,0x01,0x00,0x00,0}, // MODE_SEL: standby (again?)
@@ -67,4 +66,5 @@ uint8_t byte_strings[][5] = { // 72 lines
 {4,0x01,0x5A,0x04,0x21}, // COARSE_INTEGRATION_TIME: 0x421 = 1057
 {3,0x01,0x57,0x00,0},    // ANA_GAIN_GLOBAL_A: 0
 
+{0, 0, 0, 0} // End of command stream
 };
