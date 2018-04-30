@@ -1,14 +1,15 @@
 #ifndef _IOCTL_CMDS_H_
 #define _IOCTL_CMDS_H_
 
-// TODO: switch these out for "proper" mostly-system-unique ioctl numbers
-#define GET_BUFFER 1000 // Get an unused buffer
-#define GRAB_IMAGE 1001 // Acquire image from camera
-#define FREE_IMAGE 1002 // Release buffer
-#define PROCESS_IMAGE 1003 // Push to stencil path
-#define PEND_PROCESSED 1004 // Retreive from stencil path
-#define READ_TIMER 1010 // Retreive hw timer count
+#include <linux/ioctl.h>
+#include "ubuffer.h"
 
-// TODO: set width, height?
+#define CMA_MAGIC	'Z'
+#define GET_BUFFER 	_IOWR(CMA_MAGIC, 0x20, struct UBuffer *)	 // Get an unused buffer
+#define GRAB_IMAGE 	_IOWR(CMA_MAGIC, 0x21, struct UBuffer *)	 // Acquire image from camera
+#define FREE_IMAGE 	_IOWR(CMA_MAGIC, 0x22, struct UBuffer *)	 // Release buffer
+#define PROCESS_IMAGE 	_IOWR(CMA_MAGIC, 0x23, struct UBuffer *)	 // Push to stencil path
+#define PEND_PROCESSED 	_IOWR(CMA_MAGIC, 0x24, struct UBuffer *)	 // Retreive from stencil path
+#define READ_TIMER 	_IOWR(CMA_MAGIC, 0x25, struct UBuffer *)	 // Retreive hw timer count
 
-#endif
+#endif /* _IOCTL_CMDS_H */

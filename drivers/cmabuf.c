@@ -1,176 +1,320 @@
+/**
+ * @file cmabuf.c
+ * @authors:	Gedeon Nyengele <nyengele@stanford.edu>
+ * 				Steven Bell <sebell@stanford.edu>
+ * @date 2 April 2018
+ * version 1.1
+ * @brief driver to manage CMA buffer allocations
+ */
+
+#include <linux/init.h>
 #include <linux/module.h>
-#include <linux/cdev.h> // Character device
+#include <linux/kernel.h>
 #include <linux/device.h>
-#include <asm/uaccess.h> // Copy to/from userspace pointers
+#include <linux/fs.h>
+#include <linux/uaccess.h>
+#include <asm/page.h>
 #include <linux/mm.h>
-#include <linux/pagemap.h>
 
-MODULE_LICENSE("GPL");
-
+#include "kbuffer.h"
 #include "common.h"
-#include "buffer.h"
 #include "ioctl_cmds.h"
 
-#define CLASSNAME "cmabuffer" // Shows up in /sys/class
-#define DEVNAME "cmabuffer0" // Shows up in /dev
+#define CLASS_NAME "cmabuffer"
+#define DEVICE_NAME "cmabuffer0"
 
-dev_t device_num;
-struct cdev *chardev;
-struct device *cmabuf_dev;
-struct class *cmabuf_class;
+MODULE_LICENSE("GPL");
+MODULE_AUTHOR("Gedeon Nyengele, Steven Bell");
+MODULE_DESCRIPTION("driver for managing CMA buffer allocations");
+MODULE_VERSION("1.1");
 
-const int debug_level = 4; // 0 is errors only, increasing numbers print more stuff
+const int debug_level = 4;
 
-// TODO: allow the file handle to be opened multiple times, and access
-// the same pool of memory?
-static int dev_open(struct inode *inode, struct file *file)
-{
-  TRACE("cmabuffer: dev_open\n");
-  // Set up the image buffers; fail if it fails.
-  if(init_buffers(cmabuf_dev) < 0){
-    return(-ENOMEM);
-  }
+static int majorNumber;
+static struct class *cmaBufClass = NULL;
+static struct device *cmaBufDevice = NULL;
 
-  return(0);
-}
+static unsigned nOpens = 0;
 
-static int dev_close(struct inode *inode, struct file *file)
-{
-  TRACE("cmabuffer: dev_close\n");
-  cleanup_buffers(cmabuf_dev); // Release all the buffer memory
+/* driver parameters */
+static int mode = 1;				// by default, buffer management mode is DYNAMIC
+module_param(mode, int, S_IRUGO);	// can be read/not changed
+MODULE_PARM_DESC(mode, " DYNAMIC = 1 (default), STATIC = 0");
 
-  return(0);
-}
+static unsigned long block_size = (1 << 23);	// size in bytes of a memory chunk given to one frame
+module_param(block_size, ulong, S_IRUGO);
+MODULE_PARM_DESC(block_size, " Size in bytes for a chunk containing a single frame (default = 8MB)");
 
-void free_image(Buffer* buf)
-{
-  release_buffer(buf);
-  DEBUG("Releasing image\n");
-}
+static unsigned long block_count = 4;
+module_param(block_count, ulong, S_IRUGO);
+MODULE_PARM_DESC(block_count, " Number of chunks to allocate (default = 4)");
 
+/** @brief callbacks for defined driver operations
+ * implementation defined for open, release, ioctl, and mmap
+ */
+static int dev_open(struct inode *, struct file *);
+static int dev_release(struct inode *, struct file *);
+static long dev_ioctl(struct file *, unsigned int, unsigned long);
+static int dev_mmap(struct file *, struct vm_area_struct *);
 
-long dev_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
-{
-  Buffer tmp, *tmpptr;
-  DEBUG("ioctl cmd %d | %lu (%lx) \n", cmd, arg, arg);
-  switch(cmd){
-    case GET_BUFFER:
-      TRACE("ioctl: GET_BUFFER\n");
-      // Get the desired buffer parameters from the object passed to us
-      if(access_ok(VERIFY_READ, (void*)arg, sizeof(Buffer)) &&
-         copy_from_user(&tmp, (void*)arg, sizeof(Buffer)) == 0){
-        tmpptr = acquire_buffer(tmp.width, tmp.height, tmp.depth, tmp.stride);
-        if(tmpptr == NULL){
-          return(-ENOBUFS);
-        }
-      }
-      else{
-        return(-EIO);
-      }
-
-      // Now copy the retrieved buffer back to the user
-      if(access_ok(VERIFY_WRITE, (void*)arg, sizeof(Buffer)) &&
-         (copy_to_user((void*)arg, tmpptr, sizeof(Buffer)) == 0)) { } // All ok, nothing to do
-      else{
-        return(-EIO);
-      }
-    break;
-
-    case FREE_IMAGE:
-      TRACE("ioctl: FREE_IMAGE\n");
-      // Copy the object into our tmp copy
-      if(access_ok(VERIFY_READ, (void*)arg, sizeof(Buffer)) &&
-         copy_from_user(&tmp, (void*)arg, sizeof(Buffer)) == 0){
-          free_image(&tmp);
-      }
-      else{
-        return(-EACCES);
-      }
-      break;
-
-    default:
-      return(-EINVAL); // Unknown command, return an error
-      break;
-  }
-  return(0); // Success
-}
-
-int vma_fault(struct vm_area_struct *vma, struct vm_fault *vmf)
-{
-  struct page* pageptr;
-
-  // Calculate with physical address, ala udmabuf/LDD3
-  uint64_t offset             = vmf->pgoff << PAGE_SHIFT;
-  uint64_t phys_addr          = get_phys_addr() + offset;
-  unsigned long pageframe     = phys_addr >> PAGE_SHIFT;
-
-  DEBUG("vma_fault() offset: %llx  phys_addr: %llx pageframe: %lx\n",
-          offset, phys_addr, pageframe);
-
-  if(!pfn_valid(pageframe)) {
-    return(-1);
-  }
-  pageptr = pfn_to_page(pageframe);
-  get_page(pageptr);
-  vmf->page = pageptr;
-
-  return(0);
-}
-
-static struct vm_operations_struct vma_operations = {
-  .fault = vma_fault,
+static struct file_operations fops = {
+	.open 			= dev_open,
+	.release 		= dev_release,
+	.unlocked_ioctl = dev_ioctl,
+	.mmap 			= dev_mmap,
 };
 
-int dev_mmap(struct file *filp, struct vm_area_struct *vma)
+static int __init dev_init(void)
 {
-  TRACE("dev_mmap\n");
-  // Just set up the operations; fault operation does all the hard work
-  vma->vm_ops = &vma_operations;
-  return 0;
+	DEBUG("[cmabuf]: initializing driver...\n");
+
+	// log device driver invocation parameters
+	DEBUG("[cmabuf]: device called with following parameters:\n");
+	DEBUG("\t\tmode = %s\n",((mode == 0) ? "STATIC" : "DYNAMIC"));
+	DEBUG("\t\tblock_size = %lu bytes\n", block_size);
+	DEBUG("\t\tblock_count = %lu block(s)\n", block_count);
+
+	// dynamically allocate a major number for the device
+	majorNumber = register_chrdev(0, DEVICE_NAME, &fops);
+	if(majorNumber < 0) {
+		WARNING("[cmabuf]: failed to register a major number for device [%s]\n", DEVICE_NAME);
+		return majorNumber;
+	}
+	DEBUG("[cmabuf]: registered device [%s] with major number [%d]\n", DEVICE_NAME, majorNumber);
+
+	// register the device class
+	cmaBufClass = class_create(THIS_MODULE, CLASS_NAME);
+	if(IS_ERR(cmaBufClass)) {
+		unregister_chrdev(majorNumber, DEVICE_NAME);
+		WARNING("[cmabuf]: failed to register device class [%s]\n", CLASS_NAME);
+		return PTR_ERR(cmaBufClass);
+	}
+	DEBUG("[cmabuf]: device class [%s] registered successfully\n", CLASS_NAME);
+
+	// register the device driver
+	cmaBufDevice = device_create(cmaBufClass, NULL, MKDEV(majorNumber, 0), NULL, DEVICE_NAME);
+	if(IS_ERR(cmaBufDevice)) {
+		class_destroy(cmaBufClass);
+		unregister_chrdev(majorNumber, DEVICE_NAME);
+		WARNING("[cmabuf]: failed to register device [%s]\n", DEVICE_NAME);
+		return PTR_ERR(cmaBufDevice);
+	}
+	DEBUG("[cmabuf]: device driver registered successfully\n");
+
+	return 0;
 }
 
-struct file_operations fops = {
-  // No read/write; everything is handled by ioctl and mmap
-  .open = dev_open,
-  .release = dev_close,
-  .unlocked_ioctl = dev_ioctl,
-  .mmap = dev_mmap,
-};
-
-static int cmabuf_driver_init(void)
+static void __exit dev_exit(void)
 {
-  // Get a single character device number
-  alloc_chrdev_region(&device_num, 0, 1, DEVNAME);
-  DEBUG("Device registered with major %d, minor: %d\n", MAJOR(device_num), MINOR(device_num));
-
-  // Set up the device and class structures so we show up in sysfs,
-  // and so we have a device we can hand to the DMA request
-  cmabuf_class = class_create(THIS_MODULE, CLASSNAME);
-
-  // If we had multiple devices, we could break it apart with
-  // MAJOR(device_num), and then add in our own minor number, with
-  // MKDEV(MAJOR(device_num), minor_num)
-  cmabuf_dev = device_create(cmabuf_class, NULL, device_num, 0, DEVNAME);
-
-  // Register the driver with the kernel
-  chardev = cdev_alloc();
-  chardev->ops = &fops;
-  cdev_add(chardev, device_num, 1);
-
-  DEBUG("Driver initialized\n");
-
-  return(0);
+	device_destroy(cmaBufClass, MKDEV(majorNumber, 0)); 	// remove the device driver
+	class_unregister(cmaBufClass); 							// unregister the device class
+	class_destroy(cmaBufClass); 							// remove the device class
+	unregister_chrdev(majorNumber, DEVICE_NAME); 			// unregister the major number
+	DEBUG("[cmabuf]: device driver exited successfully\n");
 }
 
-static void cmabuf_driver_exit(void)
+// device open callback
+// TODO: allow multiple device openings and closings
+static int dev_open(struct inode *inodep, struct file *filep)
 {
-  device_unregister(cmabuf_dev);
-  class_destroy(cmabuf_class);
-  cdev_del(chardev);
-  unregister_chrdev_region(device_num, 1);
+	enum KBufferMode sys_mode;
+	int status;
 
+	DEBUG("[cmabuf]: dev_open\n");
+
+	// currently not supporting multiple concurrent openings yet
+	if(nOpens >= 1) {
+		WARNING("[cmabuf]: dev_open : no support for multiple concurrent opens\n");
+		return -EBUSY;
+	}
+	nOpens++;
+
+	// appropriately setting the buffer management mode
+	if(mode == 0) { sys_mode = STATIC; }
+	else { sys_mode = DYNAMIC; }
+
+	// initialize the buffer management system
+	status = init_buffers(cmaBufDevice, sys_mode, block_size, block_count);
+
+	return status; // 0 for success, -ENOMEM for failure
 }
 
-module_init(cmabuf_driver_init);
-module_exit(cmabuf_driver_exit);
+// device close callback
+// TODO: allow multiple device openings and closings
+static int dev_release(struct inode *inodep, struct file *filep)
+{
+	DEBUG("[cmabuf]: dev_close\n");
 
+	// dispose of all allocated buffers
+	if(nOpens) {
+		cleanup_buffers(cmaBufDevice);
+	}
+
+	// no support for multiple device closings
+	// assume only one device opened
+	nOpens = 0;
+
+	return 0;
+}
+
+// device ioctl callback
+static long dev_ioctl(struct file *filep, unsigned int cmd, unsigned long arg)
+{
+	struct UBuffer ubuf;
+	struct KBuffer *kbufPtr;
+
+	DEBUG("[cmabuf]: ioctl cmd 0x%08x | %lu (0x%lx)\n", cmd, arg, arg);
+
+	switch(cmd) {
+
+		case GET_BUFFER:
+			DEBUG("[cmabuf]: ioctl [GET_BUFFER]\n");
+
+			// get buffer parameters from user's buffer
+			if(access_ok(VERIFY_READ, (void *)arg, sizeof(struct UBuffer)) &&
+					(copy_from_user(&ubuf, (void *)arg, sizeof(struct UBuffer)) == 0)) {
+
+				kbufPtr = acquire_buffer(cmaBufDevice, ubuf.width, ubuf.height, ubuf.depth, ubuf.stride);
+				if(kbufPtr == NULL) { return -ENOBUFS; }
+			} else { return(-EIO); }
+
+			// copy the retrieved buffer back to the user
+			if(access_ok(VERIFY_WRITE, (void *)arg, sizeof(struct UBuffer)) &&
+					(copy_to_user((void *)arg, &kbufPtr->xdomain, sizeof(struct UBuffer)) == 0)) {
+
+				DEBUG("[cmabuf]: ioctl [GET_BUFFER] successful\n");
+			} else { return(-EIO); }
+		break; // GET_BUFFER
+
+		case FREE_IMAGE:
+			DEBUG("[cmabuf]: ioctl [FREE_IMAGE]\n");
+
+			// copy user buffer and request to free buffer
+			if(access_ok(VERIFY_READ, (void *)arg, sizeof(struct UBuffer)) &&
+					(copy_from_user(&ubuf, (void *)arg, sizeof(struct UBuffer))) == 0) {
+
+				// release buffer
+				DEBUG("[cmabuf]: releasing buffer [id = %u]\n", ubuf.id);
+				release_buffer(cmaBufDevice, ubuf.id);
+			} else { return(-EIO); }
+		break; // FREE_IMAGE
+
+		default:
+			//unknown command
+			return(-EINVAL);
+		break; // default
+	}
+
+	return 0;
+}
+
+/*
+ * @brief This implementation splits the offset field into
+ * two fields:
+ * 		- buffer_id : upper 16 bits
+ * 		- offset	: lower 16 bits
+ */
+static int dev_mmap(struct file *filep, struct vm_area_struct *vma)
+{
+	u64 buffer_id, offset, req_size;
+	unsigned long start_pfn;
+	struct KBuffer *kbuf;
+
+	DEBUG("[cmabuf]: dev_mmap entry\n");
+
+	// get buffer ID and offset
+	// buffer ID is stored in upper 16 bits of offset field
+	// offset is stored in lower 16 bits of offset field
+	buffer_id = vma->vm_pgoff & ((1 << 20) - 1);
+	offset = 0;
+	req_size = vma->vm_end - vma->vm_start;
+
+	// get corresponding buffer
+	kbuf = get_buffer_by_id(buffer_id);
+	if(kbuf == NULL) {
+		WARNING("[cmabuf]: dev_mmap: couldn't find a corresponding buffer to mmap\n");
+		return(-EINVAL);
+	}
+
+	// check for overflow on requested size and offset
+	DEBUG("[cmabuf]: buffer ID = %llu\n", buffer_id);
+	DEBUG("[cmabuf]: requested region size to mmap = %llu\n", req_size);
+	DEBUG("[cmabuf]: pre-allocated buffer size = %llu\n", kbuf->size);
+	DEBUG("[cmabuf]: req_size + (offset << PAGE_SHIFT) = %llu\n", (req_size + (offset << PAGE_SHIFT)));
+	DEBUG("[cmabuf]: offset = %llu pages\n", offset);
+	DEBUG("[cmabuf]: vma->vm_pgoff = 0x%08X\n", vma->vm_pgoff);
+	if(kbuf->size < req_size) {
+		WARNING("[cmabuf]: dev_mmap : mapping cannot overflow buffer boundaries\n");
+		return(-EINVAL);
+	}
+
+	// get starting pfn
+	start_pfn = kbuf->phys_addr >> PAGE_SHIFT;
+	if(!pfn_valid(start_pfn)) {
+		WARNING("[cmabuf]: dev_mmap : invalid pfn\n");
+		return(-EINVAL);
+	}	
+
+	// everything is good, so now do the mapping
+	// disable caching
+	// vma->vm_page_prot = pgprot_noncached(vma->vm_page_prot);
+	// set VM_IO flag
+	// vma->vm_flags |= VM_IO;
+	// prevent the VMA from swapping out
+	vma->vm_flags |= VM_DONTEXPAND | VM_DONTDUMP;
+	if(remap_pfn_range(vma, vma->vm_start, start_pfn, req_size, vma->vm_page_prot)) {
+		WARNING("[cmabuf] dev_mmap : failed to map buffer, try again\n");
+		return(-EAGAIN);
+	}
+	DEBUG("[cmabuf]: dev_mmap exit\n");
+	return 0;
+}
+
+/* alternate mmap implementation
+ * @brief This implementation always maps an entire buffer
+ * to user space. 
+ * changes to user parameters semantics:
+ * 		size : ignored
+ * 		offset: offset from beginning of buffer
+ */
+/*
+static int dev_mmap_alternate(struct file *filep, struct vm_area_struct *vma)
+{
+	u64 buffer_id;
+	unsigned long start_pfn;
+	struct KBuffer *kbuf;
+
+	DEBUG("[cmabuf]: dev_mmap\n");
+
+	// get buffer id (hidden within page offset field)
+	buffer_id = vma->vm_pgoff;
+
+	// find corresponding buffer
+	kbuf = get_buffer_by_id(buffer_id);
+	if(kbuf == NULL) {
+		WARNING("[cmabuf]: dev_mmap: couldn't find a corresponding buffer to mmap\n");
+		return(-EINVAL);
+	}
+
+	// calculate the starting pfn from buffer's
+	start_pfn = kbuf->phys_addr >> PAGE_SHIFT;
+	if(!pfn_valid(start_pfn)) {
+		WARNING("[cmabuf]: dev_mmap : invalid pfn\n");
+		return(-EINVAL);
+	}
+
+	// map the entire buffer
+	// it is up to the user-facing wrapper API to apply proper offset
+	// (in this implementation, the user's size parameter never matters)
+	// since the entire block gets mapped
+	if(remap_pfn_range(vma, vma->vm_start, start_pfn, kbuf->size, vma->vm_page_prot)) {
+		WARNING("[cmabuf] dev_mmap : failed to map buffer, try again\n");
+		return(-EAGAIN);
+	}
+
+	return 0;
+}
+*/
+
+module_init(dev_init);
+module_exit(dev_exit);
