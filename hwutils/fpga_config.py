@@ -6,6 +6,8 @@ import zipfile
 import os
 from lxml import etree
 import sys
+import tempfile
+import subprocess
 
 
 def unzip_hdf(src, dst):
@@ -72,11 +74,56 @@ def get_clks(elem):
             result.append(port_attr["NAME"])
     return result
 
+def parse_gpio(elem):
+    result = {}
+    def parse_int(val, base=10):
+        return int(val, base)
+    # assume elem is gpio
+    for param in elem.iter("PARAMETER"):
+        param_attr = param.attrib
+        name = param_attr["NAME"]
+        val = param_attr["VALUE"]
+        if name == "C_GPIO_WIDTH":
+            result["gpio_width"] = parse_int(val)
+        elif name == "C_GPIO2_WIDTH":
+            result["gpio2_width"] = parse_int(val)
+        elif name == "C_ALL_INPUTS":
+            result["all_inputs"] = parse_int(val)
+        elif name == "C_ALL_INPUTS_2":
+            result["all_inputs2"] = parse_int(val)
+        elif name == "C_ALL_OUTPUTS":
+            result["all_outputs"] = parse_int(val)
+        elif name == "C_ALL_OUTPUTS_2":
+            result["all_outputs2"] = parse_int(val)
+        elif name == "C_DOUT_DEFAULT":
+            result["dout_default"] = parse_int(val, 16)
+        elif name == "C_DOUT_DEFAULT_2":
+            result["dout_default2"] = parse_int(val, 16)
+        elif name == "C_IS_DUAL":
+            result["is_dual"] = parse_int(val)
+        elif name == "C_TRI_DEFAULT":
+            result["tri_default"] = parse_int(val, 16)
+        elif name == "C_TRI_DEFAULT_2":
+            result["tri_default2"] = parse_int(val, 16)
+        # reg
+        elif name == "C_BASEADDR":
+            result["base_addr"] = parse_int(val, 16)
+        elif name == "C_HIGHADDR":
+            result["high_addr"] = parse_int(val, 16)
+    if len(result) != 13:
+        raise Exception(
+                "expected {0} elements in GPIO parameters. got {1}"\
+                .format(13, len(result)))
+    # compute the reg size
+    reg_size = result["high_addr"] - result["base_addr"] + 1
+    result["reg_size"] = reg_size
+    return result
+
 def parse_hwh(filename):
     # this might not be the most efficient way to parse since it went through
     # the tree multiple times
     root = etree.parse(filename)
-    result = {"dma": [], "hls": []}
+    result = {"dma": [], "hls": [], "gpio": []}
     # find the dma block
     for mod in root.iter("MODULE"):
         mod_attr = mod.attrib
@@ -166,13 +213,16 @@ def parse_hwh(filename):
             module_result["reg_size"] = reg_size
             module_result["module_name"] = module_name
             result["hls"].append(module_result)
+        elif mod_attr.get("MODTYPE") and mod_attr["MODTYPE"] == "axi_gpio":
+            gpio = parse_gpio(mod)
+            gpio["module_name"] = mod_attr["INSTANCE"]
+            result["gpio"].append(gpio)
     return result
 
 def add_to_line(result, indent_num, val):
     # 4 space indent
     indent = "    "
     return result + indent * indent_num + val + "\n"
-
 
 def sanity_check(hw_info):
     for dma in hw_info["dma"]:
@@ -190,83 +240,177 @@ def sanity_check(hw_info):
         print("num of hls module found", len(hw_info["hls"]), "expecting",
               1, file=sys.stderr)
 
+def generate_gpio_overlay(indent, gpio):
+    result = ""
+    def add_line(result, new_indent, val):
+        # notice that this one has closing ";"
+        return add_to_line(result, indent + new_indent, val + ";")
+    # opening gpio element
+    result = add_to_line(result, indent,
+                        "{0}: gpio@{1:x} ".format(gpio["module_name"],
+                                                  gpio["base_addr"]) + "{")
+
+    result = add_line(result, 1, "#gpio-cells = <2>")
+    result = add_line(result, 1, "compatible = \"xlnx,xps-gpio-1.00.a\"")
+    result = add_line(result, 1, "gpio-controller")
+    result = add_line(result, 1, "reg = <0x0 0x{0:x} 0x0 0x{1:x}>".format(
+                                 gpio["base_addr"], gpio["reg_size"]))
+    result = add_line(result, 1, "xlnx,all-inputs = <0x{0:x}>".format(
+                                 gpio["all_inputs"]))
+    result = add_line(result, 1, "xlnx,all-inputs-2 = <0x{0:x}>".format(
+                                 gpio["all_inputs2"]))
+    result = add_line(result, 1, "xlnx,all-outputs = <0x{0:x}>".format(
+                                 gpio["all_outputs"]))
+    result = add_line(result, 1, "xlnx,all-outputs-2 = <0x{0:x}>".format(
+                                 gpio["all_outputs2"]))
+    result = add_line(result, 1, "xlnx,dout-default = <0x{0:08X}>".format(
+                                 gpio["dout_default"]))
+    result = add_line(result, 1, "xlnx,dout-default-2 = <0x{0:08X}>".format(
+                                 gpio["dout_default2"]))
+    result = add_line(result, 1, "xlnx,gpio-width = <0x{0:x}>".format(
+                                 gpio["gpio_width"]))
+    result = add_line(result, 1, "xlnx,gpio2-width = <0x{0:x}>".format(
+                                 gpio["gpio2_width"]))
+    # assuming the interupt parent is none
+    result = add_line(result, 1, "xlnx,interrupt-present = <0x0>")
+    result = add_line(result, 1, "xlnx,is-dual = <0x{0:x}>".format(
+                                 gpio["is_dual"]))
+    result = add_line(result, 1, "xlnx,tri-default = <0x{0:8X}>".format(
+                                 gpio["tri_default"]))
+    result = add_line(result, 1, "xlnx,tri-default-2 = <0x{0:8X}>".format(
+                                 gpio["tri_default2"]))
+    # closing gpio element
+    result = add_line(result, 0, "}")
+
+    return result
+
+def generate_dma_overlay(indent, dma):
+    result = ""
+    def add_line(result, new_indent, val):
+        # notice that this one has closing ";"
+        return add_to_line(result, indent + new_indent, val + ";")
+
+    tag = "{0}: dma@{1:08X} ".format(dma["module_name"], dma["base_addr"]) \
+        + "{"
+    # opening the dma element
+    result = add_to_line(result, indent, tag)
+    result = add_line(result, 1, "#dma-cells = <1>")
+    result = add_line(result, 1, "clock-names = \"" +
+                                 "\", \"".join(dma["clks"]) + "\"")
+    result = add_line(result, 1, "clocks = " + ", ".join(["<&misc_clk_0>"
+                                  for i in range(len(dma["clks"]))]))
+    result = add_line(result, 1, "compatible = \"xlnx,axi-dma-1.00.a\"")
+    result = add_line(result, 1, "interrupt-parent = <&gic>")
+
+    # get interrupt numbers
+    irqs = get_irqs(len(dma["dma_channels"]))
+    irq_tag = " ".join(["0 {0} 4".format(irq) for irq in irqs])
+    result = add_line(result, 1, "interrupts = <" + irq_tag + ">")
+    base_addr = dma["base_addr"]
+    result = add_line(result, 1, "reg = <0x0 0x{0:08X} 0x0 0x{1:x}>".format(
+                                  base_addr, dma["reg_size"]));
+    # all 32 bit
+    result = add_line(result, 1, "xlnx,addrwidth = <0x20>");
+    result = add_line(result, 1, "xlnx,include-sg");
+    result = add_line(result, 1, "xlnx,multichannel-dma")
+
+    # enumerate through the channels
+    for idx, chan in enumerate(dma["dma_channels"]):
+        addr = base_addr + chan[1] # (type, offset)
+        # opening dma channel
+        result = add_to_line(result, indent + 1,
+                             "dma-channel@{0:08X} ".format(addr) + "{")
+        result = add_line(result, 2, "compatible = \"" + chan[0] + "\"")
+        result = add_line(result, 2, "dma-channels = <0x1>")
+        result = add_line(result, 2,
+                          "interrupts = <0 {0} 4>".format(irqs[idx]));
+        is_mm2s = "mm2s" in chan[0]
+        result = add_line(result, 2, "xlnx,datawidth = <0x{0:x}>".format(
+                                      dma["mm2s_datawidth"] if is_mm2s else
+                                      dma["s2mm_datawidth"]))
+        result = add_line(result, 2, "xlnx,device-id = <0x0>")
+        # closing dma channel
+        result = add_line(result, 1, "}")
+    # closing dma element
+    result = add_line(result, 0, "}")
+    return result
+
+def generate_hls_overlay(indent, hls):
+    result = ""
+    def add_line(result, new_indent, val):
+        # notice that this one has closing ";"
+        return add_to_line(result, indent + new_indent, val + ";")
+
+    base_addr = hls["base_addr"]
+    # opening hls element
+    result = add_to_line(result, indent, "{0}: hls_target@{1:08X}".format(
+                         hls["module_name"], base_addr) + " {")
+    result = add_line(result, 1, "compatible = \"xlnx,hls-target-1.0\"")
+    result = add_line(result, 1, "reg = <0x0 0x{0:08X} 0x0 0x{1:x}>".format(
+                         base_addr, hls["reg_size"]))
+    # closing hls element
+    result = add_line(result, 0, "}")
+
+    return result
+
+def hardcoded_overlay(indent):
+    result = ""
+    def add_line(result, new_indent, val):
+        # notice that this one has closing ";"
+        return add_to_line(result, indent + new_indent, val + ";")
+    result = add_to_line(result, indent, "psu_ctrl_ipi: PERIPHERAL@ff380000 {")
+    result = add_line(result, 1, "compatible = \"xlnx,PERIPHERAL-1.0\"")
+    result = add_line(result, 1, "reg = <0x0 0xff380000 0x0 0x80000>")
+    result = add_line(result, 0, "}")
+
+    result = add_to_line(result, indent,
+                         "psu_message_buffers: PERIPHERAL@ff990000 {")
+    result = add_line(result, 1, "compatible = \"xlnx,PERIPHERAL-1.0\"")
+    result = add_line(result, 1, "reg = <0x0 0xff990000 0x0 0x10000>")
+    result = add_line(result, 0, "}")
+
+    result = add_to_line(result, indent, "misc_clk_0: misc_clk_0 {")
+    return add_line(result, 0, "}")
+
 def generate_overlay(hw_info):
     # based on https://lkml.org/lkml/2014/5/28/280
     # may consider to make a dt builder
     result = ""
-    result += "/plugin/;	"\
-              "/* allow undefined label references and record them */\n"
+    result += "/dts-v1/;\n/plugin/;	" \
+              "/* allow undefined label references and record them */\n\n"
     result += "/ {\n"
 
     # opening fragment
-    result = add_to_line(result, 1, "fragment@0")
+    result = add_to_line(result, 1, "fragment@0 {")
+    # write cell format
+    result = add_to_line(result, 2, "#address-cells = <2>;")
+    result = add_to_line(result, 2, "#size-cells = <2>;")
     # overlay to amba_pl element
-    result = add_to_line(result, 2, "target = <&amba_pl>;")
+    result = add_to_line(result, 2, "target = <&amba>;")
     # start the overlay
     result = add_to_line(result, 2, "__overlay__ {")
+    # define our own amba_pl
+    result = add_to_line(result, 3, "amba_pl: amba_pl@0 {")
+    # more cell format
+    result = add_to_line(result, 4, "#address-cells = <2>;")
+    result = add_to_line(result, 4, "#size-cells = <2>;")
+
     # loop through each module
+    for gpio in hw_info["gpio"]:
+        result += generate_gpio_overlay(4, gpio)
+
     for dma in hw_info["dma"]:
-        tag = "{0}: dma@0x{1:08x} ".format(dma["module_name"],
-                                            dma["base_addr"]) + "{"
-        # opening the dma element
-        result = add_to_line(result, 3, tag)
-        result = add_to_line(result, 4, "#dma-cells = <1>;")
-        result = add_to_line(result, 4, "clock-names = \"" + \
-                                        "\", \"".join(dma["clks"]) + "\";")
-        result = add_to_line(result, 4, "clocks = " + \
-                            ", ".join(["<&misc_clk_0>"
-                                      for i in range(len(dma["clks"]))]) + ";")
-        result = add_to_line(result, 4,
-                             "compatible = \"xlnx,axi-dma-1.00.a\";")
-        result = add_to_line(result, 4, "interrupt-parent = <&gic>;")
-
-        # get interrupt numbers
-        irqs = get_irqs(len(dma["dma_channels"]))
-        irq_tag = " ".join(["0 {0} 4".format(irq) for irq in irqs])
-        result = add_to_line(result, 4, "interrupts = <" + irq_tag + ">;")
-        base_addr = dma["base_addr"]
-        result = add_to_line(result, 4,
-                             "reg = <0x0 0x{0:08x} 0x0 0x{1:x}>;".format(
-                             base_addr, dma["reg_size"]));
-        # all 32 bit
-        result = add_to_line(result, 4, "xlnx,addrwidth = <0x20>;");
-        result = add_to_line(result, 4, "xlnx,include-sg;");
-        result = add_to_line(result, 4, "xlnx,multichannel-dma;")
-
-        # enumerate through the channels
-        for idx, chan in enumerate(dma["dma_channels"]):
-            addr = base_addr + chan[1] # (type, offset)
-            # opening dma channel
-            result = add_to_line(result, 4,
-                                 "dma-channel@{0:08x} ".format(addr) + "{")
-            result = add_to_line(result, 5, "compatible = \"" + \
-                                 chan[0] + "\";")
-            result = add_to_line(result, 5, "dma-channels = <0x1>;")
-            result = add_to_line(result, 5,
-                                 "interrupts = <0 {0} 4>;".format(irqs[idx]));
-            is_mm2s = "mm2s" in chan[0]
-            result = add_to_line(result, 5,
-                                 "xlnx,datawidth = <0x{0:x}>;".format(
-                                 dma["mm2s_datawidth"] if is_mm2s else
-                                 dma["s2mm_datawidth"]))
-            result = add_to_line(result, 5, "xlnx,device-id = <0x0>;")
-            # closing dma channel
-            result = add_to_line(result, 4, "};")
-        # closing dma element
-        result = add_to_line(result, 3, "};")
+        result += generate_dma_overlay(4, dma)
 
     for hls in hw_info["hls"]:
-        base_addr = hls["base_addr"]
-        # opening hls element
-        result = add_to_line(result, 3, "{0}: hls_target@{1:08x}".format(
-                             hls["module_name"], base_addr) + " {")
-        result = add_to_line(result, 4,
-                             "compatible = \"xlnx,hls-target-1.0\";")
-        result = add_to_line(result, 4,
-                             "reg = <0x0 0x{0:08x} 0x0 0x{1:x}>;".format(
-                             base_addr, hls["reg_size"]))
-        # closing hls element
-        result = add_to_line(result, 3, "};")
+        result += generate_hls_overlay(4, hls)
+
+    # hardcoded
+    # TODO: fix this?
+    result += hardcoded_overlay(4)
+
+    # ending amba_pl element
+    result = add_to_line(result, 3, "};")
 
     # ending overlay
     result = add_to_line(result, 2, "};")
@@ -275,6 +419,25 @@ def generate_overlay(hw_info):
     # this is the end
     result += "};"
     return result
+
+def compile_dtb(str_val):
+    working_dir = tempfile.mkdtemp()
+    dst_file = tempfile.mkstemp(suffix=".dst", dir=working_dir)[1]
+    dtb_file = tempfile.mkstemp(suffix=".dtb", dir=working_dir)[1]
+    # write to the source file
+    with open(dst_file, "w") as f:
+        f.write(str_val)
+    # assume user already has dtc installed
+    # add no warning flag because current dtc doesn't like overlay that well
+    flags = " -I dts -O dtb -W no-unit_address_vs_reg"
+    command = "dtc " + dst_file + " -o " + dtb_file + flags
+    print(command)
+    subprocess.check_call(command.split())
+
+    return dtb_file
+
+def install_overlay(dtb_file):
+    pass
 
 if __name__ == "__main__":
     if len(sys.argv) != 2:
@@ -285,4 +448,4 @@ if __name__ == "__main__":
     hw_info = parse_hwh(hwh_file)
     sanity_check(hw_info)
     dts_str = generate_overlay(hw_info)
-    print(dts_str)
+    compile_dtb(dts_str)
