@@ -83,6 +83,10 @@ amba {
         interrupts = <0 29 4>;
     } ;
 
+	/* this is used to obtain phandle for dt overlay */
+	dummy {
+		ref = <&amba_pl>;
+	};
 };
 
 /* END of R5 remoteproc stuff */
