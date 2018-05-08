@@ -463,7 +463,6 @@ CONFIG.C_GPIO_WIDTH {3} \
   # Create and configure the DPHY receiver
   set ${module['name']}_dphy [ create_bd_cell -type ip -vlnv xilinx.com:ip:mipi_dphy:3.1 ${module['name']}_dphy ]
   set_property -dict [ list \
-    CONFIG.C_DATA_LANE1_IO_POSITION {4} \
     CONFIG.C_DPHY_LANES {2} \
     CONFIG.C_DPHY_MODE {SLAVE} \
     CONFIG.C_INIT {100000} \
@@ -472,9 +471,58 @@ CONFIG.C_GPIO_WIDTH {3} \
     CONFIG.DATA_LANE2_BYTE {All_Byte} \
     CONFIG.DATA_LANE3_BYTE {All_Byte} \
     CONFIG.SupportLevel {1} \
+## The pin names/positions are redundant, but we have to specify them or it won't work
+<%
+## Valid sets are (clk/data0/data1)
+## AB6 / AD8 / AE7
+## AD4 / AD1 / AE4
+## W4 / W1 / AA4
+## R2 / U1 / N1
+  banks = {'AB6':64,
+           'AD4':64,
+           'W4' :64,
+           'R2' :65
+  }
+
+  io_loc_names = {'AB6':'IO_L1P_T0L_N0_DBC_64',
+                  'AD8':'IO_L2P_T0L_N2_64',
+                  'AE7':'IO_L3P_T0L_N4_AD15P_64',
+                  'AD4':'IO_L16P_T2U_N6_QBC_AD3P_64',
+                  'AD1':'IO_L17P_T2U_N8_AD10P_64',
+                  'AE4':'IO_L18P_T2U_N10_AD2P_64',
+                  'W4' :'IO_L22P_T3U_N6_DBC_AD0P_64',
+                  'W1' :'IO_L23P_T3U_N8_64',
+                  'AA4':'IO_L24P_T3U_N10_64',
+                  'R2' :'IO_L1P_T0L_N0_DBC_65',
+                  'U1' :'IO_L2P_T0L_N2_65',
+                  'N1' :'IO_L3P_T0L_N4_AD15P_65'
+  }
+
+  io_positions = {'AB6':0,
+                  'AD8':2,
+                  'AE7':4,
+                  'AD4':32,
+                  'AD1':34,
+                  'AE4':36,
+                  'W4' :45,
+                  'W1' :47,
+                  'AA4':49,
+                  'R2' :0,
+                  'U1' :2,
+                  'N1' :4
+  }
+%> \
+    CONFIG.HP_IO_BANK_SELECTION {${banks[module['clk_loc']]}} \
+    CONFIG.HP_IO_BANK_NAME {${banks[module['clk_loc']]}_(HP)} \
     CONFIG.CLK_LANE_IO_LOC {${module['clk_loc']}} \
     CONFIG.DATA_LANE0_IO_LOC {${module['data0_loc']}} \
     CONFIG.DATA_LANE1_IO_LOC {${module['data1_loc']}} \
+    CONFIG.CLK_LANE_IO_LOC_NAME {${io_loc_names[module['clk_loc']]}} \
+    CONFIG.DATA_LANE0_IO_LOC_NAME {${io_loc_names[module['data0_loc']]}} \
+    CONFIG.DATA_LANE1_IO_LOC_NAME {${io_loc_names[module['data1_loc']]}} \
+    CONFIG.C_CLK_LANE_IO_POSITION {${io_positions[module['clk_loc']]}} \
+    CONFIG.C_DATA_LANE0_IO_POSITION {${io_positions[module['data0_loc']]}} \
+    CONFIG.C_DATA_LANE1_IO_POSITION {${io_positions[module['data1_loc']]}} \
      ] $${module['name']}_dphy
 ## TODO: to save resources, we could not put the PLL in each dphy block
 
