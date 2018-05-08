@@ -1,10 +1,14 @@
 /* imx219_cam.c
- *
+ * Control code for IMX219, as well as the CSI receiver.
  */
 
-#include "imx219_cam.h"
 #include "i2c.h"
+#include "si514_clk.h"
+#include "ttc_clock.h"
+#include "platform.h"
+#include "imx219_cam.h"
 #include "initcommands.h"
+
 
 s32 read_registers(u16 address, u8 nregs, u8 registers[])
 {
@@ -30,16 +34,38 @@ s32 read_registers(u16 address, u8 nregs, u8 registers[])
 	return XST_SUCCESS;
 }
 
-void focus_init(void)
+/* Set the focus position of the lens
+ * @param raw_value: a 10-bit number which translates to the lens position
+ */
+void set_focus(u16 raw_value)
 {
-    u8 control[2];
-    control[0] = 0x3f; // Leave top two bits zero
-    control[1] = 0; // Direct drive mode
-    XIic_Send(I2C_BASEADDR, I2C_FOCUS_ADDR, control, 2, XIIC_STOP);
+  // VCM controller has only two configuration bytes
+  // [ Power down | FLAG | data (10 bits) | slope control (2 bits) | step period (2 bits) ]
+  u8 control[2];
+  control[0] = (raw_value >> 4) & 0x3F; // Leave PD and FLAG as 0, write 6/10 bits
+  control[1] = (raw_value << 4) & 0xF0; // Bottom 4/10 bits, leave control bits 0
+  i2c_write(I2C_FOCUS_ADDR, control, 2);
 }
 
-void imx219_cam_init(void)
+void csi_irq_handler(void* val)
 {
+  IMX219_Config* cam = (IMX219_Config*)val;
+
+  cam->finished_time = ttc_clock_now(); // Save the current time
+  u32* ctrlreg = (u32*)cam->baseaddr;
+  ctrlreg[1] = 0xe; // Ack interrupts
+}
+
+void imx219_cam_init(IMX219_Config* config)
+{
+  // Set up the receive interrupt handler
+  connect_interrupt(config->irq, csi_irq_handler, (void*)config);
+
+  // Set up the camera clock
+  i2c_set_mux(config->i2c_channel);
+  si514_init();
+
+  // Now write the camera registers
   u8 result[2];
   read_registers(0x0000, 2, result); // ID (should be 0x0219)
   usleep(1000);
@@ -56,3 +82,22 @@ void imx219_cam_init(void)
   }
 }
 
+/* Sets the CSI receiver to capture frames */
+void imx219_cam_run(IMX219_Config* config)
+{
+  u32* csirx = (u32*)config->baseaddr;
+
+  csirx[0] = CSIRX_CTRL_RUN_CONTINUOUS | CSIRX_CTRL_ENABLE_INTERRUPTS | CSIRX_CTRL_ENABLE_SOF_IRQ;
+  csirx[1] = 0xf; // Start running
+}
+
+void imx219_cam_set_exposure(IMX219_Config* config, u16 lines){
+  // Set the COARSE_INTEGRATION_TIME register 0x015A
+  uint8_t regvals[4] = {0x01,0x5A,0x00,0x00};
+
+  regvals[2] = lines >> 8;
+  regvals[3] = lines & 0xff;
+
+  i2c_set_mux(config->i2c_channel);
+  XIic_Send(IIC_BASEADDR, I2C_CAM_ADDR, regvals, 4, XIIC_STOP);
+}
