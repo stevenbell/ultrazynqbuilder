@@ -1,5 +1,5 @@
 /**
- * @file dma_driver.c
+ * @file driver.c
  * @authors:	Gedeon Nyengele <nyengele@stanford.edu>
  * 				
  * @date April 25 2018
@@ -54,14 +54,12 @@ static unsigned nOpens = 0;
 struct resource* irq_res = NULL; // interrupt
 struct resource* reg_res = NULL; // register space
 static char *dev_base_addr = NULL; // base address for register space
-static char *sg_base_addr_raw = NULL;
 static char *sg_base_addr = NULL; // base address for SG descritor table
 static struct KBuffer *dma_buffers[N_BUFFERS];
-struct device *dev = NULL; // device handle (used for DMA mem allocations)
 
 // external functions defined in our custom buffer allocator (KBuffer)
-extern struct KBuffer *acquire_buffer(struct device *, u32, u32, u32, u32);
-extern void release_buffer(struct device *, u32);
+extern struct KBuffer *acquire_buffer(u32, u32, u32, u32);
+extern void release_buffer(u32);
 
 // wait queue
 // for in-progess frames.
@@ -75,6 +73,7 @@ static int dev_open(struct inode *inodep, struct file *filep)
 	int i;
 	unsigned long temp_val;
 	char *sg;
+	u32 addr;
 
 	DEBUG("[dma-mod] dev_open entry\n");
 
@@ -87,40 +86,52 @@ static int dev_open(struct inode *inodep, struct file *filep)
 	nOpens++;
 
 	// allocate space for SG descriptor table
-	// SG descriptors need to be 16-word aligned and addresses returned by kmalloc
-	// are L1-cache aligned. So we make sure to do the right alignment.
 	DEBUG("[dma-mod] allocating space for SG descriptor table...\n");
-	sg_base_addr_raw = kmalloc((N_BUFFERS + 1) * DESC_SIZE, GFP_KERNEL);
-	if(sg_base_addr_raw == NULL) {
+	sg_base_addr = kmalloc((N_BUFFERS + 1) * DESC_SIZE, GFP_KERNEL);
+	if(sg_base_addr == NULL) {
 		ERROR("[dma-mod] could not allocate memory for SG Descriptor Table\n");
 		return -ENOMEM;
 	}
-	temp_val = (unsigned)sg_base_addr_raw & ~((1 << 6) - 1);
-	sg_base_addr = (char *)((temp_val < (unsigned long)sg_base_addr_raw) ? temp_val + DESC_SIZE : temp_val);
+	DEBUG("[dma-mod] sg_base_addr = 0x%08x\n", (u32)sg_base_addr);
+	DEBUG("[dma-mod] touching the SG desc table memory region so kernel can do mappings...\n");
+	memset(sg_base_addr, 0, (N_BUFFERS + 1) * DESC_SIZE);
+	DEBUG("[dma-mod] SG desc table memory touch completed\n");
 	DEBUG("[dma-mod] successfully allocated memory for the SG descriptor tbale\n");
 
 	// allocate N_BUFFERS KBuffers
+	DEBUG("[dma-mod] allocating KBuffers for dma ring buffer...\n");
 	temp_val = 0;
 	for(i = 0; i < N_BUFFERS; i++) {
-		dma_buffers[i] = acquire_buffer(dev, IMG_WIDTH, IMG_HEIGHT, IMG_DEPTH, IMG_STRIDE);
+		DEBUG("\tacquiring buffer [%d]...\n", i);
+		dma_buffers[i] = acquire_buffer(IMG_WIDTH, IMG_HEIGHT, IMG_DEPTH, IMG_STRIDE);
 		if(dma_buffers[i] == NULL) {
+			DEBUG("\tfailed to acquire ring buffer [%d]\n", i);
 			break;
 		}
+		DEBUG("\tring buffer [%d] successfully acquired\n", i);
 		temp_val++;
 	}
 	if(temp_val != N_BUFFERS) {
+		DEBUG("[dma-mod] failed to acquire [%d] ring buffers\n", N_BUFFERS);
+		DEBUG("[dma-mod] releasing the [%d] acquired ring buffers...\n", temp_val);
 		for(i = temp_val - 1; i >= 0; i--) {
-			release_buffer(dev, dma_buffers[i]->xdomain.id);
+			release_buffer(dma_buffers[i]->xdomain.id);
 		}
-		kfree(sg_base_addr_raw);
+		DEBUG("dma-mod] ring buffer release completed\n");
+		kfree(sg_base_addr);
 		ERROR("[dma-mod] could not allocate KBuffers for the %d ring buffers\n", N_BUFFERS);
 		return -ENOMEM;
 	}
-
+	DEBUG("[dma-mod] successfully acquired all %d ring buffers\n", N_BUFFERS);
 	// set up the SG descriptor table
+	DEBUG("[dma-mod] setting up the SG descriptor table...\n");
 	sg = sg_base_addr;
+	DEBUG("[dma-mod] getting SG decriptor table physical address...\n");
+	addr = (u32) virt_to_phys(sg_base_addr);
+	DEBUG("[dma-mod] SG desc table physical address obtained\n");
 	for(i = 0; i < N_BUFFERS; i++) {
-		*(volatile u32 *)(sg + 0x00) = (u32)(__pa(sg_base_addr) + ((i+1) % N_BUFFERS) * 0x40); // next descriptor address 
+		DEBUG("[dma-mod] setting up descriptor for buffer [%d]...\n", i);
+		*(volatile u32 *)(sg + 0x00) = (u32)(addr + ((i+1) % N_BUFFERS) * 0x40); // next descriptor address 
 		*(volatile u32 *)(sg + 0x04) = 0; // NEXTDESC_MSB = 0 for 32-bit addresses
 		*(volatile u32 *)(sg + 0x08) = (u32)(dma_buffers[i]->phys_addr); // buffer address (lower 32 bits)
 		*(volatile u32 *)(sg + 0x0C) = 0; // buffer address MSB = 0 for 4GB memory size
@@ -129,8 +140,11 @@ static int dev_open(struct inode *inodep, struct file *filep)
 		*(volatile u32 *)(sg + 0x18) = (IMG_WIDTH * IMG_DEPTH) << HSIZE_OFFSET;
 		*(volatile u32 *)(sg + 0x1C) = 0;
 		sg += 0x40;
+		DEBUG("[dma-mod] finished setting up descriptor for buffer [%d]\n", i);
 	}
+	DEBUG("[dma-mod] SG descriptor table setup is complete\n");
 
+	DEBUG("[dma-mod] setting up the DMA engine (register access)...\n");
 	// enable coherency for SG transactions
 	iowrite32(0x0000000f, (void *)(dev_base_addr + 0x2C));
 
@@ -138,11 +152,12 @@ static int dev_open(struct inode *inodep, struct file *filep)
 	iowrite32((1 << 0) | (1 << 16) | (1 << 12), (void *)(dev_base_addr + 0x30));
 
 	// set current descriptor pointer
-	iowrite32(__pa(sg_base_addr), (void *)(dev_base_addr + 0x38));
+	iowrite32(addr, (void *)(dev_base_addr + 0x38));
 	iowrite32(0, (void *)(dev_base_addr + 0x3C));
 
 	// set the tail descritor pointer to kickstart dma operations
-	iowrite32(__pa(sg_base_addr) + 0x40 * (N_BUFFERS-1), (void *)(dev_base_addr + 0x40));
+	iowrite32(addr + 0x40 * (N_BUFFERS-1), (void *)(dev_base_addr + 0x40));
+	DEBUG("[dma-mod] DMA engine setup complete\n");
 
 	DEBUG("[dma-mod] dev_open exit\n");
 	return 0;
@@ -161,12 +176,12 @@ static int dev_close(struct inode *inodep, struct file *filep)
 	// free KBuffers
 	DEBUG("[dma-mod] releasing KBuffersfor ring buffers\n");
 	for(i = 0; i < N_BUFFERS; i++) {
-		release_buffer(dev, dma_buffers[i]->xdomain.id);
+		release_buffer(dma_buffers[i]->xdomain.id);
 	}
 
 	// free SG descriptor table
 	DEBUG("[dma-mod] releasing SG descriptor table memory\n");
-	kfree(sg_base_addr_raw);
+	kfree(sg_base_addr);
 
 	// adjust nOpens
 	nOpens--;
@@ -199,7 +214,7 @@ static long grab_image(struct UBuffer *buf)
 		atomic_set(&new_frame, 0);
 
 		// kickstart the DMA by writing TAIL DESC
-		iowrite32(__pa(sg_base_addr) + 0x40 * (N_BUFFERS-1), (void *)(dev_base_addr + 0x40));
+		iowrite32((u32)virt_to_phys(sg_base_addr) + 0x40 * (N_BUFFERS-1), (void *)(dev_base_addr + 0x40));
 	}
 
 	// wait until we have a new image
@@ -208,11 +223,11 @@ static long grab_image(struct UBuffer *buf)
 
 	// get index of completed descriptor
 	sg = (char *) ioread32((const volatile void *)(dev_base_addr + 0x38)); // get current descriptor pointer
-	temp_val = ((unsigned)sg - (unsigned) __pa(sg_base_addr)) >> 6; // get current descriptor index
+	temp_val = ((unsigned)sg - (unsigned) virt_to_phys(sg_base_addr)) >> 6; // get current descriptor index
 	temp_val = temp_val ? temp_val - 1 : (N_BUFFERS - 1); // get index of previous descriptor (the actual completed one)
 	
 	// get a replacement buffer
-	rep_buf = acquire_buffer(dev, IMG_WIDTH, IMG_HEIGHT, IMG_DEPTH, IMG_STRIDE);
+	rep_buf = acquire_buffer(IMG_WIDTH, IMG_HEIGHT, IMG_DEPTH, IMG_STRIDE);
 	if(rep_buf == NULL) {
 		ERROR("[dma-mod] failed to acquire a replacement buffer for ring buffers\n");
 		return -ENOMEM;
@@ -342,9 +357,6 @@ static int dev_probe(struct platform_device *pdev)
 		return PTR_ERR(drvDevice);
 	}
 	
-	// get device handle for use with KBuffer
-	dev = &pdev->dev;
-
 	DEBUG("[dma-mod]: device driver registered successfully\n");
 	DEBUG("[dma-mod] dev_probe exit\n");
 	return 0;
