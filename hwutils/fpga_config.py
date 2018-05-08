@@ -4,20 +4,20 @@ from __future__ import print_function
 
 import zipfile
 import os
-from lxml import etree
+from lxml import etree # may consider some drop in replacement lib
 import sys
 import tempfile
 import subprocess
+import re
+import shutil
 
 
-def unzip_hdf(src, dst):
-    if not os.path.isfile(src):
-        raise Exception(src + " does not exist")
-    if not os.path.isdir(dst):
-        raise Exception(dst + " does not exist")
-
+def unzip_hdf(src):
+    working_dir = tempfile.mkdtemp()
+    # ZipFile() will check the file for us
     z = zipfile.ZipFile(src)
-    z.extractall(dst)
+    z.extractall(working_dir)
+    return working_dir
 
 def find_hdf(path):
     if os.path.isdir(path):
@@ -73,6 +73,22 @@ def get_clks(elem):
         if port_attr["SIGIS"] == "clk":
             result.append(port_attr["NAME"])
     return result
+
+def get_ambapl_phandle():
+    # this runs query on the living device tree and obtained the phandle
+    # number through dtc decompile
+    # notice that for some reason /proc/ gives wrong phandle value
+    with open(os.devnull, 'w') as FNULL:
+     device_tree = subprocess.check_output(
+		   "dtc -I fs /sys/firmware/devicetree/base".split(),
+		   stderr=FNULL)
+    # run regex to obtain the phandle value
+    regex = r"amba_pl(.|\n)*?phandle = <(?P<phandle>0x(\d+))>;"
+    m = re.search(regex, device_tree, re.MULTILINE)
+    phandle_str = m.group("phandle")
+    int(phandle_str, 16) # check if it's actually hex str
+    # return the hex str
+    return phandle_str
 
 def parse_gpio(elem):
     result = {}
@@ -374,6 +390,7 @@ def hardcoded_overlay(indent):
 
 def generate_overlay(hw_info):
     # based on https://lkml.org/lkml/2014/5/28/280
+    phandle = "0x37" #get_ambapl_phandle()
     # may consider to make a dt builder
     result = ""
     result += "/dts-v1/;\n/plugin/;	" \
@@ -386,31 +403,26 @@ def generate_overlay(hw_info):
     result = add_to_line(result, 2, "#address-cells = <2>;")
     result = add_to_line(result, 2, "#size-cells = <2>;")
     # overlay to amba_pl element
-    result = add_to_line(result, 2, "target = <&amba>;")
+    result = add_to_line(result, 2, "target = <{0}>;".format(phandle))
     # start the overlay
     result = add_to_line(result, 2, "__overlay__ {")
-    # define our own amba_pl
-    result = add_to_line(result, 3, "amba_pl: amba_pl@0 {")
     # more cell format
-    result = add_to_line(result, 4, "#address-cells = <2>;")
-    result = add_to_line(result, 4, "#size-cells = <2>;")
+    result = add_to_line(result, 3, "#address-cells = <2>;")
+    result = add_to_line(result, 3, "#size-cells = <2>;")
 
     # loop through each module
     for gpio in hw_info["gpio"]:
-        result += generate_gpio_overlay(4, gpio)
+        result += generate_gpio_overlay(3, gpio)
 
     for dma in hw_info["dma"]:
-        result += generate_dma_overlay(4, dma)
+        result += generate_dma_overlay(3, dma)
 
     for hls in hw_info["hls"]:
-        result += generate_hls_overlay(4, hls)
+        result += generate_hls_overlay(3, hls)
 
     # hardcoded
     # TODO: fix this?
-    result += hardcoded_overlay(4)
-
-    # ending amba_pl element
-    result = add_to_line(result, 3, "};")
+    result += hardcoded_overlay(3)
 
     # ending overlay
     result = add_to_line(result, 2, "};")
@@ -437,15 +449,44 @@ def compile_dtb(str_val):
     return dtb_file
 
 def install_overlay(dtb_file):
-    pass
+    # assume we are already sudo
+    # we only want one activate so remove the previous one, if it exists
+    OVERLAY_DIRNAME = "fcam4"
+    OVERLAY_ROOT = "/sys/kernel/config/device-tree/overlays/"
+    if not os.isdir(OVERLAY_ROOT):
+        raise Exception(OVERLAY_ROOT + " not found")
+    overlay_dir = os.path.join(OVERLAY_ROOT, OVERLAY_DIRNAME)
+    if os.isdir(overlay_dir):
+        os.rmdir(overlay_dir) # uninstall the old one
+    os.mkdir(overlay_dir)
+    dst = os.path.join(overlay_dir, "dtbo")
+    shutil.copyfile(dtb_file, dst)
+    # the rest is up to kernel
+
+def is_root():
+    return os.geteuid() == 0
+
+def clean_up(files):
+    # clean up stuff due to memory concern
+    # remove the temp dir we created
+    for filename in files:
+        dirname = os.path.dirname(filename)
+        os.rmdir(dirname)
 
 if __name__ == "__main__":
     if len(sys.argv) != 2:
-        print("[Usage]:", sys.argv[0], "<project.sdk>", file=sys.stderr)
+        print("[Usage]:", sys.argv[0], "<project.hdf>", file=sys.stderr)
+        exit(1)
 
-    hwh_file = find_hwh(sys.argv[1])
-
+    if not is_root():
+        print("please run as root or `sudo", sys.argv[0], "<project.hdf>`",
+              file=sys.stderr)
+        exit(1)
+    hdf_dir = unzip_hdf(sys.argv[1])
+    hwh_file = find_hwh(hdf_dir)
     hw_info = parse_hwh(hwh_file)
     sanity_check(hw_info)
     dts_str = generate_overlay(hw_info)
-    compile_dtb(dts_str)
+    dtb_file = compile_dtb(dts_str)
+    install_overlay(dtb_file)
+    clean_up([dtb_file, hwh_file])
