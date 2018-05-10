@@ -20,5 +20,6 @@ echo "127.0.0.1 ubuntu-zynq" >> /etc/hosts
 
 # Set up auto-mounting of boot partition
 mkdir /mnt/boot
-echo -e "/dev/mmcblk1p1\t/mnt/boot\tauto\tuser,umask=000\t0\t0" | sudo tee /etc/fstab
+# sh echo doesn't handle -e, so use the gnu one in /bin/echo
+/bin/echo -e "/dev/mmcblk1p1\t/mnt/boot\tauto\tuser,umask=000\t0\t0" | sudo tee /etc/fstab
 
