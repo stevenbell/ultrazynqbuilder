@@ -280,3 +280,4 @@ amba {
   status = "okay";
 };
 
+/include/ "system-user-overlay.dtsi"
