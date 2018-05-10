@@ -17,3 +17,9 @@ folder: `project-spec/meta-user/recipes-bsp/device-tree/files/`
 The `system-user.dtsi` file located under the directory specified
 above has an "include" statement that expects the generated
 `system-user-overlay.dtsi` file in case an overlay needs to be applied.
+
+## Customization
+The `dtconfig.py` script provides a way to customize the labelling
+of certain properties from the generated node overlays. 
+This can be found under the `PARAMETER DEFINITIONS` section inside the 
+`dtconfig.py` script.

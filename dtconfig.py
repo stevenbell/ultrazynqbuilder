@@ -21,7 +21,7 @@ prop_name_dmas_in = "dmas-in"
 # name of hls node's property that references output dmas
 prop_name_dmas_out = "dmas-out"
 
-# name of dma node's property that reference parent hls node
+# name of dma node's property that references parent hls node
 prop_name_hls_ref = "hls-node"
 
 ######## END OF PARAMETE DEFINITIONS ########
