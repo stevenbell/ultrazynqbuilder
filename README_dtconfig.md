@@ -19,7 +19,7 @@ above has an "include" statement that expects the generated
 `system-user-overlay.dtsi` file in case an overlay needs to be applied.
 
 ## Customization
-The `dtconfig.py` script provides a way to customize the labelling
+The `dtconfig.py` script provides a way to customize the labeling
 of certain properties from the generated node overlays. 
 This can be found under the `PARAMETER DEFINITIONS` section inside the 
 `dtconfig.py` script.
