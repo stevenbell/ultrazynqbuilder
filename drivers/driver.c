@@ -56,6 +56,10 @@ BufferSet buffer_pool[N_DMA_BUFFERSETS];
 
 #define DMA_MAX_CHANS_PER_DEVICE	0x20
 
+/* these values are copied from the official implementation */
+#define XILINX_DMA_MM2S_CTRL_OFFSET 0x0000
+#define XILINX_DMA_S2MM_CTRL_OFFSET 0x0030
+
 // Each scanline is a separate scatter-gather block so that we can handle striding.
 // For example, the VDMA engine writes data in with a 2048-pixel stride, where
 // the last 128 pixels are empty; this lets us grab the valid parts and stream
@@ -341,7 +345,7 @@ int process_image(struct dma_drvdata *drvdata, Buffer *buf_list)
   // Acquire a bufferset to pass through the processing chain
   wait_event_interruptible(buffer_free_queue, !buffer_listempty(&free_list));
   src = buffer_dequeue(&free_list);
-
+  TRACE("src id is %d\n", src->id);
   TRACE("process_image: got BufferSet\n");
   /* copy buffer address */
   for (i = 0; i < drvdata->nr_channels; i++) {
@@ -535,23 +539,24 @@ long dev_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
                                                            (void*)(arg +
                                                                    i * bsize),
                                                            bsize)) {
-                                                break;
+                                                retval = -EIO;
+                                                goto failed;
                                         }
                                 }
-                                retval = process_image(drvdata, tmp_buf);
+                                return process_image(drvdata, tmp_buf);
                         }
                         /* cannot read or copy */
                         retval = -EIO;
-                        break;
+                        goto failed;
                 case PEND_PROCESSED:
                         TRACE("ioctl: PEND_PROCESSED\n");
                         pend_processed(arg);
-                        retval = 0;
-                        break;
+                        return 0;
                 default:
                         retval = -EINVAL; /* unknown command, return an error */
-                        break;
+                        goto failed;
         }
+failed:
         return retval;
 }
 
@@ -627,7 +632,6 @@ static int dma_chan_probe(struct device_node *node,
 {
         struct dma_chan *chan;
         struct device *dev = &drvdata->pdev->dev;
-        struct resource *mem;
         int retval;
 
         chan = devm_kzalloc(dev, sizeof(*chan), GFP_KERNEL);
@@ -641,9 +645,9 @@ static int dma_chan_probe(struct device_node *node,
 
         /* based on the naming to determine data flow direction */
 	    if (of_device_is_compatible(node, "xlnx,axi-dma-mm2s-channel")) {
-                chan->input_chan = false;
-        } else if(of_device_is_compatible(node, "xlnx,axi-dma-s2mm-channel")) {
                 chan->input_chan = true;
+        } else if(of_device_is_compatible(node, "xlnx,axi-dma-s2mm-channel")) {
+                chan->input_chan = false;
         } else {
                 dev_err(dev, "unknown dma channel\n");
                 retval = -EINVAL;
@@ -654,33 +658,31 @@ static int dma_chan_probe(struct device_node *node,
         chan->irq = irq_of_parse_and_map(node, 0);
         retval = request_irq(chan->irq, dma_irq_handler, IRQF_SHARED,
                              "dma-irq-handler", chan);
+        DEBUG("chan: %d irq->%d", chan_id, chan->irq);
         if (retval < 0) {
                 dev_err(dev, "request_irq() failed for chann id: %d\n",
                         chan_id);
                 goto failed0;
         }
 
-        /* ioremap */
-        mem = platform_get_resource(drvdata->pdev, IORESOURCE_MEM, 0);
-        if (!mem) {
-                dev_err(dev, "cannot get memory info for chan %d."
-                             "please check device tree\n", chan_id);
-                goto failed1;
-        }
-        chan->controller = devm_ioremap_resource(dev, mem);
-        if (IS_ERR(chan->controller)) {
-                dev_err(dev, "ioremap() failed for chan %d"
-                             "please check device tree\n", chan_id);
-                retval = PTR_ERR(chan->controller);
-                goto failed1;
-        }
+        /*
+         * we don't do ioremap for individual channels. instead we calculate
+         * the relative address based on the parent dma ioremap address
+         */
+        if (chan->input_chan) /* mm2s */
+                chan->controller = XILINX_DMA_MM2S_CTRL_OFFSET
+                                 + drvdata->controller;
+        else
+                chan->controller = XILINX_DMA_S2MM_CTRL_OFFSET
+                                 + drvdata->controller;
+        dev_notice(dev, "chan: %d controller: 0x%p\n", chan->id,
+                   chan->controller);
 
         /* validate dma channel */
         if (check_dma_engine(chan->controller)) {
-                dev_err(dev, "dma chan %d misconfigured or hung!\n",
-                        chan_id);
+                dev_err(dev, "dma chan %d misconfigured or hung!\n", chan_id);
                 retval = -ENODEV;
-                goto failed2;
+                goto failed1;
         }
 
         /* set up wait queue using macro */
@@ -690,11 +692,9 @@ static int dma_chan_probe(struct device_node *node,
         drvdata->chan[chan->id] = chan;
 
         return 0;
-failed2:
-        iounmap(chan->controller);
 
 failed1:
-        free_irq(chan->irq, drvdata);
+        free_irq(chan->irq, chan);
 
 failed0:
         kfree(chan);
@@ -704,9 +704,7 @@ failed0:
 
 static int dma_chan_remove(struct dma_chan *chan)
 {
-        /* clean memory */
-        iounmap(chan->controller);
-
+        DEBUG("remove chan: %d irq: %d\n", chan->id, chan->irq);
         /* free irq */
         free_irq(chan->irq, chan);
 
@@ -745,7 +743,7 @@ static int dma_hwacc_probe(struct dma_drvdata *drvdata)
 
         /* use the name geenrated by Halide-HLS */
         // KEYI: verify that, maybe do an overlay in meta-user?
-        node = of_find_compatible_node(NULL, NULL, "hls_target-1.0");
+        node = of_find_compatible_node(NULL, NULL, "xlnx,hls-target-1.0");
         if (!node) {
                 dev_err(&pdev->dev, "cannot find hwacc node in device tree\n");
                 return -ENODEV;
@@ -764,7 +762,7 @@ static int dma_hwacc_probe(struct dma_drvdata *drvdata)
                                     "please check device tree\n");
                 return -ENODEV;
         }
-        drvdata->controller = devm_ioremap_resource(&pdev->dev, mem);
+        drvdata->controller = ioremap(mem->start, 0x100);
 
         if (!drvdata->controller) {
                 dev_err(&pdev->dev, "ioremap() failed for hwacc\n");
@@ -829,12 +827,9 @@ static int hwacc_probe(struct platform_device *pdev)
          * we only need one instance, since we're simply launching work,
          * not queuing up a bunch of tasks.
          */
-        drvdata->launch_work = (struct work_struct)
-                               __WORK_INITIALIZER(drvdata->launch_work,
-                                                  dma_launch_work);
-        drvdata->finished_work = (struct work_struct)
-                                __WORK_INITIALIZER(drvdata->finished_work,
-                                                   dma_finished_work);
+
+        INIT_WORK(&drvdata->launch_work, dma_launch_work);
+        INIT_WORK(&drvdata->finished_work, dma_finished_work);
 
         /* Get a single character device number */
         alloc_chrdev_region(&device_num, 0, 1, DEVNAME);
