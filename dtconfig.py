@@ -24,6 +24,9 @@ prop_name_dmas_out = "dmas-out"
 # name of dma node's property that references parent hls node
 prop_name_hls_ref = "hls-node"
 
+# name of the property that contains device node's name
+prop_name_node_name = "hw-name"
+
 ######## END OF PARAMETE DEFINITIONS ########
 
 # check command-line args
@@ -86,6 +89,7 @@ for key in overlay:
 dt_overlay = ""
 for key in sorted(overlay.iterkeys()):
 	dt_overlay += "&" + key + " {"
+	dt_overlay += "\n\t" + prop_name_node_name + " = " + "\"" + overlay[key]['definition']['name'] + "\";"
 
 	if overlay[key]['definition']['type'] == 'dma':
 		dt_overlay += "\n\tcompatible = \"" + dma_compatible_string + "\";"
