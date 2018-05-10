@@ -3,7 +3,7 @@ the_ROM_image:
     [fsbl_config] a53_x64
     [bootloader] images/linux/zynqmp_fsbl.elf
     [pmufw_image] images/linux/pmufw.elf
-    [destination_device=pl] images/linux/uz3eg_iocc_dp_wrapper.bit
+    [destination_device=pl] images/linux/design_1_wrapper.bit
     [destination_cpu=a53-0, exception_level=el-3, trustzone] images/linux/bl31.elf
     [destination_cpu=a53-0, exception_level=el-2] images/linux/u-boot.elf
     [init] regs.init
