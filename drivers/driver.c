@@ -87,7 +87,6 @@ BufferList complete_list;
 // are woken up when the interrupt fires.
 DECLARE_WAIT_QUEUE_HEAD(processing_finished);
 DECLARE_WAIT_QUEUE_HEAD(buffer_free_queue); // Writes waiting for a free buffer
-atomic_t output_finished_count;
 
 // Workqueues which are used to asynchronously configure the DMA engine after
 // a buffer has been filled and to move a buffer after DMA finishes.
@@ -108,7 +107,6 @@ struct dma_chan {
 
         int id;
         bool input_chan;
-        atomic_t finished_count; /* won't be used for inputs */
         wait_queue_head_t wq;
 };
 
@@ -118,7 +116,9 @@ struct dma_drvdata {
         struct cdev cdev; /* char device structure */
         struct dma_chan *chan[DMA_MAX_CHANS_PER_DEVICE];
         dev_t device_num;
-        void __iomem *controller;
+        void __iomem *hls_controller;
+        void __iomem *chan_controller;
+        void __iomem *gpio_controller;
 
         u32 nr_channels;
         int chan_id;
@@ -126,6 +126,7 @@ struct dma_drvdata {
         /* work queue */
         struct work_struct launch_work;
         struct work_struct finished_work;
+        atomic_t finished_count; /* won't be used for inputs */
 };
 
 const int debug_level = 4; // 0 is errors only, increasing numbers print more stuff
@@ -211,7 +212,7 @@ static int dev_open(struct inode *inode, struct file *file)
     DEBUG("enqueing buffer set %d\n", i);
     buffer_enqueue(&free_list, buffer_pool + i);
   }
-  atomic_set(&output_finished_count, 0); // No buffers finished yet
+  atomic_set(&drvdata->finished_count, 0); // No buffers finished yet
   return(0);
 }
 
@@ -330,6 +331,7 @@ int process_image(struct dma_drvdata *drvdata, Buffer *buf_list)
   Buffer *buf;
   struct dma_chan *chan;
   struct chan_buf *chan_buf;
+  int retval;
 
   for (i = 0; i < drvdata->nr_channels; i++) {
     chan = drvdata->chan[i];
@@ -385,7 +387,9 @@ int process_image(struct dma_drvdata *drvdata, Buffer *buf_list)
   buffer_enqueue(&queued_list, src);
 
   // Launch a work queue task to write this to the DMA
-  queue_work(dma_launch_queue, &drvdata->launch_work);
+  //retval = queue_work(dma_launch_queue, &drvdata->launch_work);
+  retval = schedule_work(&drvdata->launch_work);
+  TRACE("queue_work ret: %d\n", retval);
 
   TRACE("process_image: return\n");
   return(src->id);
@@ -439,7 +443,7 @@ void dma_launch_work(struct work_struct* ws)
 
     // Start the stencil engine running
     // control register [7: auto_restart, --- 3: ap_ready, 2: ap_idle, 1: ap_done, 0: ap_start]
-    iowrite32(0x00000001, drvdata->controller + 0);
+    iowrite32(0x00000001, drvdata->hls_controller + 0);
     TRACE("dma_launch_work: Transfers started\n");
 
     // Move the buffer to the processing list
@@ -450,17 +454,23 @@ void dma_launch_work(struct work_struct* ws)
 void dma_finished_work(struct work_struct* ws)
 {
   BufferSet* buf;
+  struct dma_drvdata *drvdata = container_of(ws, struct dma_drvdata,
+                                             finished_work);
+
   TRACE("dma_finished_work: begin\n");
 
   // Check that all of the output DMAs have completed their work
   // TODO: bugs may lurk here if there are multiple outputs and the primary
   // finishes first.
-  while(atomic_read(&output_finished_count) > 0) {
+  TRACE("finished_count: %d memory address: %p\n",
+         atomic_read(&drvdata->finished_count), &drvdata->finished_count);
+
+  while(atomic_read(&drvdata->finished_count) > 0) {
 
     // Decrement the completion count
     // This is the only part of the driver that will decrement these counts,
     // so we can be sure that if they're all >0, we have a frame.
-    atomic_dec(&output_finished_count);
+    atomic_dec(&drvdata->finished_count);
 
     buf = buffer_dequeue(&processing_list);
     DEBUG("dma_finished_work: buf: %lx\n", (unsigned long)buf);
@@ -479,7 +489,7 @@ void dma_finished_work(struct work_struct* ws)
       //buf->output.height * buf->output.stride * buf->output.depth, DMA_FROM_DEVICE);
     TRACE("dma_finished_work: dma_unmap_single() finished.\n");
     }
-
+    TRACE("we got it? %d\n", buffer_hasid(&complete_list, buf->id));
     buffer_enqueue(&complete_list, buf);
   }
 
@@ -500,6 +510,8 @@ void pend_processed(int id)
 
   // Block until a completed buffer becomes available
   wait_event_interruptible(processing_finished, buffer_hasid(&complete_list, id));
+
+  TRACE("we are here!\n");
 
   // Remove the buffer
   resultSet = buffer_dequeueid(&complete_list, id);
@@ -564,7 +576,7 @@ int dev_mmap(struct file *filp, struct vm_area_struct *vma)
 {
   unsigned long physical_pfn, vsize;
   struct dma_drvdata *drvdata = filp->private_data;
-  uintptr_t controller = (uintptr_t)drvdata->controller;
+  uintptr_t controller = (uintptr_t)drvdata->hls_controller;
 
   physical_pfn = (controller >> PAGE_SHIFT) + vma->vm_pgoff; // Physical page
   vsize = vma->vm_end - vma->vm_start; // Requested virtual size (in bytes)
@@ -613,7 +625,7 @@ static irqreturn_t dma_irq_handler(int irq, void *data)
                  * would cause dma_finished_work to only execute once, when it
                  * was queued twice.
                  */
-                atomic_inc(&chan->finished_count);
+                atomic_inc(&drvdata->finished_count);
                 /* delegate the work of moving the buffer from "PROCESSING" to
                  * "FINISHED".
                  * We can't do it here, since we're in an atomic context and
@@ -621,7 +633,8 @@ static irqreturn_t dma_irq_handler(int irq, void *data)
                  */
                 DEBUG("irq: Launching workqueue to complete processing\n");
                 /* launch a work queue task to write this to the DMA */
-                queue_work(dma_finished_queue, &drvdata->finished_work);
+                //queue_work(dma_finished_queue, &drvdata->finished_work);
+                schedule_work(&drvdata->finished_work);
                 return 0;
         }
 }
@@ -671,10 +684,10 @@ static int dma_chan_probe(struct device_node *node,
          */
         if (chan->input_chan) /* mm2s */
                 chan->controller = XILINX_DMA_MM2S_CTRL_OFFSET
-                                 + drvdata->controller;
+                                 + drvdata->chan_controller;
         else
                 chan->controller = XILINX_DMA_S2MM_CTRL_OFFSET
-                                 + drvdata->controller;
+                                 + drvdata->chan_controller;
         dev_notice(dev, "chan: %d controller: 0x%p\n", chan->id,
                    chan->controller);
 
@@ -762,14 +775,65 @@ static int dma_hwacc_probe(struct dma_drvdata *drvdata)
                                     "please check device tree\n");
                 return -ENODEV;
         }
-        drvdata->controller = ioremap(mem->start, 0x100);
-
-        if (!drvdata->controller) {
+        drvdata->hls_controller = ioremap(mem->start, 18);
+        TRACE("hls_target: 0x%llX\n", mem->start);
+        if (!drvdata->hls_controller) {
                 dev_err(&pdev->dev, "ioremap() failed for hwacc\n");
-                return PTR_ERR(drvdata->controller);
+                return PTR_ERR(drvdata->hls_controller);
         }
 
         return 0;
+}
+
+static int find_set_gpio(struct dma_drvdata *drvdata)
+{
+        struct platform_device *pdev = drvdata->pdev, *gpio;
+        struct device_node *node = NULL;
+        struct resource *io;
+        void __iomem *mem;
+        const __be32 *ip;
+        int i, width, retval;
+
+        // TODO: for no it only tries to search 3 times
+        for (i = 0; i < 3; i++) {
+                node = of_find_compatible_node(node, NULL,
+                                               "xlnx,xps-gpio-1.00.a");
+                if (!node)
+                        break;
+                // TODO: use a phandle for this
+                ip = of_get_property(node, "xlnx,gpio2-width", NULL);
+                if (!ip) {
+                        DEBUG("cannot find gpio width\n");
+                        retval = -ENODEV;
+                        goto failed;
+                }
+                width = be32_to_cpup(ip);
+                DEBUG("width is %d\n", width);
+                if (width == 0x20)
+                        break;
+        }
+        if (!node) {
+                DEBUG("no node found\n");
+                retval = -ENODEV;
+                goto failed;
+        }
+
+        /* we foudn the actual gpio node */
+        gpio = of_find_device_by_node(node);
+        io = platform_get_resource(gpio, IORESOURCE_MEM, 0);
+        mem = devm_ioremap_resource(&pdev->dev, io);
+
+        of_node_put(node); /* decrease the refcount */
+        /*
+         * no need to clean the memory since it's managed by kernel
+         * we only need to write the 0x02 to the register
+         */
+        iowrite32(0x00000002, (void*)mem);
+        return 0;
+
+failed:
+        return retval;
+
 }
 
 static int hwacc_probe(struct platform_device *pdev)
@@ -792,7 +856,7 @@ static int hwacc_probe(struct platform_device *pdev)
 
         /* request and map I/O memory */
         io = platform_get_resource(pdev, IORESOURCE_MEM, 0);
-        drvdata->controller = devm_ioremap_resource(&pdev->dev, io);
+        drvdata->chan_controller = devm_ioremap_resource(&pdev->dev, io);
 
         // TODO:
         // MAY NEED TO ADD BACK AS NEEDED
@@ -812,6 +876,10 @@ static int hwacc_probe(struct platform_device *pdev)
 
         /* find hwacc info */
         retval = dma_hwacc_probe(drvdata);
+        if (retval < 0)
+                goto failed0;
+
+        retval = find_set_gpio(drvdata);
         if (retval < 0)
                 goto failed0;
 
@@ -881,7 +949,8 @@ static int hwacc_remove(struct platform_device *pdev)
         }
 
         /* remove hwacc */
-        iounmap(drvdata->controller);
+        iounmap(drvdata->hls_controller);
+        iounmap(drvdata->gpio_controller);
 
         device_unregister(pipe_dev);
         class_destroy(pipe_class);
