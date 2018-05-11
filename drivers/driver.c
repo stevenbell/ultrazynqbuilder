@@ -39,13 +39,14 @@
 MODULE_LICENSE("GPL");
 
 #define CLASSNAME "hwacc" // Shows up in /sys/class
-#define DEVNAME "hwacc0" // Shows up in /dev
+#define DEVNAME "hwacc" // Shows up in /dev
 
 #define ACC_CONTROLLER_PAGES 1
 
-dev_t device_num;
-struct device *pipe_dev;
 struct class *pipe_class;
+
+#define MAX_HWACC_MODULE 8
+int device_usage[MAX_HWACC_MODULE]; /* controls the char dev creation */
 
 #define N_DMA_BUFFERSETS 16 // Number of "buffer set" objects for passing through the queues
 BufferSet buffer_pool[N_DMA_BUFFERSETS];
@@ -88,11 +89,6 @@ BufferList complete_list;
 DECLARE_WAIT_QUEUE_HEAD(processing_finished);
 DECLARE_WAIT_QUEUE_HEAD(buffer_free_queue); // Writes waiting for a free buffer
 
-// Workqueues which are used to asynchronously configure the DMA engine after
-// a buffer has been filled and to move a buffer after DMA finishes.
-struct workqueue_struct* dma_launch_queue;
-struct workqueue_struct* dma_finished_queue;
-
 // Forward declarations of the work functions
 void dma_launch_work(struct work_struct*);
 void dma_finished_work(struct work_struct*);
@@ -115,7 +111,6 @@ struct dma_drvdata {
         struct platform_device  *pdev;
         struct cdev cdev; /* char device structure */
         struct dma_chan *chan[DMA_MAX_CHANS_PER_DEVICE];
-        dev_t device_num;
         void __iomem *hls_controller;
         void __iomem *chan_controller;
         void __iomem *gpio_controller;
@@ -127,6 +122,11 @@ struct dma_drvdata {
         struct work_struct launch_work;
         struct work_struct finished_work;
         atomic_t finished_count; /* won't be used for inputs */
+
+        /* char dev */
+        struct device *pipe_dev;
+        dev_t device_num;
+        int dev_index;
 };
 
 const int debug_level = 4; // 0 is errors only, increasing numbers print more stuff
@@ -371,7 +371,7 @@ int process_image(struct dma_drvdata *drvdata, Buffer *buf_list)
     for (i = 0; i < drvdata->nr_channels; i++) {
     chan_buf = &src->chan_buf_list[i];
     flag = drvdata->chan[i]->input_chan ? DMA_TO_DEVICE : DMA_FROM_DEVICE;
-    dma_map_single(pipe_dev, chan_buf->buf.kern_addr,
+    dma_map_single(drvdata->pipe_dev, chan_buf->buf.kern_addr,
                    chan_buf->buf.height * chan_buf->buf.stride
                                         * chan_buf->buf.depth,
                    flag);
@@ -387,9 +387,7 @@ int process_image(struct dma_drvdata *drvdata, Buffer *buf_list)
   buffer_enqueue(&queued_list, src);
 
   // Launch a work queue task to write this to the DMA
-  //retval = queue_work(dma_launch_queue, &drvdata->launch_work);
   retval = schedule_work(&drvdata->launch_work);
-  TRACE("queue_work ret: %d\n", retval);
 
   TRACE("process_image: return\n");
   return(src->id);
@@ -633,7 +631,6 @@ static irqreturn_t dma_irq_handler(int irq, void *data)
                  */
                 DEBUG("irq: Launching workqueue to complete processing\n");
                 /* launch a work queue task to write this to the DMA */
-                //queue_work(dma_finished_queue, &drvdata->finished_work);
                 schedule_work(&drvdata->finished_work);
                 return 0;
         }
@@ -894,12 +891,6 @@ static int hwacc_probe(struct platform_device *pdev)
         if (retval < 0)
                 goto failed0;
 
-        /* create workqueue threads
-         * names just show up in `ps`
-         */
-        dma_launch_queue = create_singlethread_workqueue("dma_launch");
-        dma_finished_queue = create_singlethread_workqueue("dma_done");
-
         /* manually setup the work queue because we want to pass drvdata
          * into the callback.
          * corresponding structures that get put in the queues.
@@ -911,31 +902,49 @@ static int hwacc_probe(struct platform_device *pdev)
         INIT_WORK(&drvdata->finished_work, dma_finished_work);
 
         /* Get a single character device number */
-        alloc_chrdev_region(&device_num, 0, 1, DEVNAME);
+        alloc_chrdev_region(&drvdata->device_num, 0, 1, DEVNAME);
         DEBUG("Device registered with major %d, minor: %d\n",
-              MAJOR(device_num), MINOR(device_num));
+              MAJOR(drvdata->device_num), MINOR(drvdata->device_num));
 
         /* set up the device and class structures so we show up in sysfs,
          * and so we have a device we can hand to the DMA request
          */
         pipe_class = class_create(THIS_MODULE, CLASSNAME);
 
-        pipe_dev = device_create(pipe_class, &pdev->dev, device_num, 0,
-                                 DEVNAME);
+        for (drvdata->dev_index = 0; drvdata->dev_index < MAX_HWACC_MODULE;
+             drvdata->dev_index++) {
+                if (!device_usage[drvdata->dev_index]) {
+                        device_usage[drvdata->dev_index] = true;
+                        break; /* we've found a free device slot */
+                }
+        }
+        if (drvdata->dev_index == MAX_HWACC_MODULE) {
+                /* exceeds the max number of devices */
+                dev_err(&pdev->dev, "exceeds maximum number of char devices\n");
+                retval = -ENOMEM;
+                goto failed1;
+        }
+
+        drvdata->pipe_dev = device_create(pipe_class, &pdev->dev,
+                                          drvdata->device_num, 0,
+                                          DEVNAME "%d", drvdata->dev_index);
 
         /* register the driver with the kernel */
         cdev_init(&drvdata->cdev, &fops);
         drvdata->cdev.owner = THIS_MODULE;
-        cdev_add(&drvdata->cdev, device_num, 1);
+        cdev_add(&drvdata->cdev, drvdata->device_num, 1);
 
         /* set drvdata to everything */
         platform_set_drvdata(pdev, drvdata);
-        dev_set_drvdata(pipe_dev, drvdata);
+        dev_set_drvdata(drvdata->pipe_dev, drvdata);
 
         DEBUG("Driver initialized\n");
 
         return(0);
 
+failed1:
+        /* remove the allocated region */
+        unregister_chrdev_region(drvdata->device_num, 1);
 
 failed0:
         /* free drvdata the last */
@@ -954,15 +963,16 @@ static int hwacc_remove(struct platform_device *pdev)
                         dma_chan_remove(drvdata->chan[i]);
         }
 
-        /* remove hwacc */
-        iounmap(drvdata->hls_controller);
-        iounmap(drvdata->gpio_controller);
+        /* all ioremap are call using devm_, hence no manual cleanup needed */
 
-        device_unregister(pipe_dev);
+        device_unregister(drvdata->pipe_dev);
         class_destroy(pipe_class);
         cdev_del(&drvdata->cdev);
-        unregister_chrdev_region(device_num, 1);
+        unregister_chrdev_region(drvdata->device_num, 1);
 
+        device_usage[drvdata->dev_index] = false;
+
+        dev_notice(&pdev->dev, "hwacc removed");
         return(0);
 }
 
