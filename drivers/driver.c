@@ -748,41 +748,54 @@ static int dma_child_probe(struct device_node *node,
         return 0;
 }
 
-static int dma_hwacc_probe(struct dma_drvdata *drvdata)
+static int init_dma(struct dma_drvdata *drvdata)
 {
-        struct platform_device *pdev = drvdata->pdev, *hwacc;
-        struct device_node *node;
-        struct resource *mem;
+        struct platform_device *pdev = drvdata->pdev, *dma;
+        struct resource *io;
+        struct device_node *child, *dma_node;
+        int i, retval;
 
-        /* use the name geenrated by Halide-HLS */
-        // KEYI: verify that, maybe do an overlay in meta-user?
-        node = of_find_compatible_node(NULL, NULL, "xlnx,hls-target-1.0");
-        if (!node) {
-                dev_err(&pdev->dev, "cannot find hwacc node in device tree\n");
-                return -ENODEV;
+        /* find the phandle for dma */
+        /* NOTE: currently only one DMA is supported */
+        dma_node = of_parse_phandle(pdev->dev.of_node, "dmas-in", 0);
+        if (!dma_node) {
+                retval = -ENODEV;
+                goto failed0;
+        }
+        dma = of_find_device_by_node(dma_node);
+        if (!dma) {
+                retval = -ENODEV;
+                goto failed0;
+        }
+        /* request and map I/O memory  for dma */
+        io = platform_get_resource(dma, IORESOURCE_MEM, 0);
+        drvdata->chan_controller = devm_ioremap_resource(&pdev->dev, io);
+
+        if (!drvdata->chan_controller) {
+                retval = -ENOMEM;
+                goto failed0;
         }
 
-        hwacc = of_find_device_by_node(node);
-        if (!hwacc) {
-                dev_err(&pdev->dev, "cannot find hwacc platform device\n");
-                return -ENODEV;
+        /* initialize channels */
+        for_each_child_of_node(dma_node, child) {
+                retval = dma_child_probe(child, drvdata);
+                if (retval < 0)
+                        goto failed1;
         }
 
-        /* ioremap */
-        mem = platform_get_resource(hwacc, IORESOURCE_MEM, 0);
-        if (!mem) {
-                dev_err(&pdev->dev, "cannot get memory info for hwacc"
-                                    "please check device tree\n");
-                return -ENODEV;
-        }
-        drvdata->hls_controller = ioremap(mem->start, 18);
-        TRACE("hls_target: 0x%llX\n", mem->start);
-        if (!drvdata->hls_controller) {
-                dev_err(&pdev->dev, "ioremap() failed for hwacc\n");
-                return PTR_ERR(drvdata->hls_controller);
-        }
+        of_node_put(dma_node);
 
         return 0;
+
+failed1:
+        for (i = 0; i < drvdata->nr_channels; i++) {
+                if (drvdata->chan[i])
+                        dma_chan_remove(drvdata->chan[i]);
+        }
+
+failed0:
+        of_node_put(dma_node);
+        return retval;
 }
 
 static int find_set_gpio(struct dma_drvdata *drvdata)
@@ -790,7 +803,6 @@ static int find_set_gpio(struct dma_drvdata *drvdata)
         struct platform_device *pdev = drvdata->pdev, *gpio;
         struct device_node *node = NULL;
         struct resource *io;
-        void __iomem *mem;
         const __be32 *ip;
         int i, width, retval;
 
@@ -821,14 +833,14 @@ static int find_set_gpio(struct dma_drvdata *drvdata)
         /* we foudn the actual gpio node */
         gpio = of_find_device_by_node(node);
         io = platform_get_resource(gpio, IORESOURCE_MEM, 0);
-        mem = devm_ioremap_resource(&pdev->dev, io);
+        drvdata->gpio_controller = devm_ioremap_resource(&pdev->dev, io);
 
         of_node_put(node); /* decrease the refcount */
         /*
          * no need to clean the memory since it's managed by kernel
          * we only need to write the 0x02 to the register
          */
-        iowrite32(0x00000002, (void*)mem);
+        iowrite32(0x00000002, (void*)drvdata->gpio_controller);
         return 0;
 
 failed:
@@ -838,11 +850,10 @@ failed:
 
 static int hwacc_probe(struct platform_device *pdev)
 {
-        struct device_node *child, *node = pdev->dev.of_node;
         struct dma_drvdata *drvdata;
         struct resource *io;
 
-        int i, retval;
+        int retval;
 
         /* alocate drvdata */
         drvdata = devm_kzalloc(&pdev->dev, sizeof(*drvdata), GFP_KERNEL);
@@ -854,9 +865,16 @@ static int hwacc_probe(struct platform_device *pdev)
 
         drvdata->pdev = pdev;
 
-        /* request and map I/O memory */
+        /* request and map I/O memory  for hwacc*/
         io = platform_get_resource(pdev, IORESOURCE_MEM, 0);
-        drvdata->chan_controller = devm_ioremap_resource(&pdev->dev, io);
+        /* override the size */
+        drvdata->hls_controller = devm_ioremap_resource(&pdev->dev, io);
+
+        if (!drvdata->hls_controller) {
+                dev_err(&pdev->dev, "ioremap() failed for hls");
+                retval = -ENOMEM;
+                goto failed0;
+        }
 
         // TODO:
         // MAY NEED TO ADD BACK AS NEEDED
@@ -867,19 +885,12 @@ static int hwacc_probe(struct platform_device *pdev)
 
         platform_set_drvdata(pdev, drvdata);
 
-        /* initialize channels */
-        for_each_child_of_node(node, child) {
-                retval = dma_child_probe(child, drvdata);
-                if (retval < 0)
-                        goto failed0;
-        }
-
-        /* find hwacc info */
-        retval = dma_hwacc_probe(drvdata);
+        retval = find_set_gpio(drvdata);
         if (retval < 0)
                 goto failed0;
 
-        retval = find_set_gpio(drvdata);
+        /* setup dma */
+        retval = init_dma(drvdata);
         if (retval < 0)
                 goto failed0;
 
@@ -927,11 +938,6 @@ static int hwacc_probe(struct platform_device *pdev)
 
 
 failed0:
-        for (i = 0; i < drvdata->nr_channels; i++) {
-                if (drvdata->chan[i])
-                        dma_chan_remove(drvdata->chan[i]);
-        }
-
         /* free drvdata the last */
         kfree(drvdata);
         return retval;
@@ -961,10 +967,9 @@ static int hwacc_remove(struct platform_device *pdev)
 }
 
 static struct of_device_id hwacc_of_match[] = {
-  // Bind to the DMA engine so we can get its info from the device tree
-//  { .compatible = "hwacc", },
-  { .compatible = "xlnx,axi-dma-1.00.a", },
-  {}
+        /* bind to hls_module */
+        { .compatible = "hls-target", },
+        {}
 };
 
 static struct platform_driver hwacc_driver = {
