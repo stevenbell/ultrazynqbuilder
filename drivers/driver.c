@@ -54,7 +54,6 @@ BufferSet buffer_pool[N_DMA_BUFFERSETS];
 #define SG_DESC_SIZE 16 // Size of each SG descriptor, in 32-byte words
 #define SG_DESC_BYTES (SG_DESC_SIZE * 4)  // Size of each descriptor in bytes
 
-
 #define DMA_MAX_CHANS_PER_DEVICE	0x20
 
 /* these values are copied from the official implementation */
@@ -71,31 +70,12 @@ BufferSet buffer_pool[N_DMA_BUFFERSETS];
 // So page order has to be over 64kb/4kb = 16, -> page order 5.
 #define SG_PAGEORDER 5
 
-// A BufferSet is attached to one of the following lists, which determines its state.
-// All of the lists maintain order (i.e, FIFO).
-// FREE - Input buffer is ready to be filled with data
-BufferList free_list;
-// QUEUED - Has data (flushed to RAM) and is ready to be streamed
-BufferList queued_list;
-// PROCESSING - Input DMA has started, and output DMA has not yet finished.
-// This implies that some part of the buffer's contents are in the stencil path.
-// If more than one buffer is in this state, something is probably very wrong.
-BufferList processing_list;
-// COMPLETE - DMA has finished, and output data is ready to be handed back to the user
-BufferList complete_list;
-
-// Wait queues to pend on the various DMA operations. Things waiting on these
-// are woken up when the interrupt fires.
-DECLARE_WAIT_QUEUE_HEAD(processing_finished);
-DECLARE_WAIT_QUEUE_HEAD(buffer_free_queue); // Writes waiting for a free buffer
-
 // Forward declarations of the work functions
 void dma_launch_work(struct work_struct*);
 void dma_finished_work(struct work_struct*);
 
-
 struct dma_chan {
-        struct dma_drvdata *drvdata;
+        struct hwacc_drvdata *drvdata;
         struct device *dev;
 
         void __iomem *controller;
@@ -106,7 +86,7 @@ struct dma_chan {
         wait_queue_head_t wq;
 };
 
-struct dma_drvdata {
+struct hwacc_drvdata {
         struct device *dev;
         struct platform_device  *pdev;
         struct cdev cdev; /* char device structure */
@@ -118,16 +98,49 @@ struct dma_drvdata {
         u32 nr_channels;
         int chan_id;
 
+        /* only allow one process accessing hwacc at a time */
+        atomic_t usage_count;
+
         /* work queue */
         struct work_struct launch_work;
         struct work_struct finished_work;
         atomic_t finished_count; /* won't be used for inputs */
+
+        /*
+         * Wait queues to pend on the various DMA operations.
+         * Things waiting on these are woken up when the interrupt fires.
+         */
+        wait_queue_head_t processing_finished;
+        /* Writes waiting for a free buffer */
+        wait_queue_head_t buffer_free_queue;
+        /*
+         * A BufferSet is attached to one of the following lists, which
+         * determines its state All of the lists maintain order (i.e, FIFO).
+         * FREE - Input buffer is ready to be filled with data
+         */
+        BufferList free_list;
+        /*
+         * QUEUED - Has data (flushed to RAM) and is ready to be streamed
+         */
+        BufferList queued_list;
+        /*  PROCESSING - Input DMA has started, and output DMA has not yet
+         *  finished. This implies that some part of the buffer's contents
+         *  are in the stencil path. If more than one buffer is in this state,
+         *  something is probably very wrong.
+         */
+        BufferList processing_list;
+        /*
+         * COMPLETE - DMA has finished, and output data is ready to be handed
+         * back to the user
+         */
+        BufferList complete_list;
 
         /* char dev */
         struct device *pipe_dev;
         dev_t device_num;
         int dev_index;
 };
+
 
 const int debug_level = 4; // 0 is errors only, increasing numbers print more stuff
 
@@ -176,18 +189,22 @@ int check_dma_engine(unsigned char* dma_controller)
 static int dev_open(struct inode *inode, struct file *file)
 {
   int i, j;
-  struct dma_drvdata *drvdata;
+  struct hwacc_drvdata *drvdata;
   struct dma_chan *chan;
   struct chan_buf *buf;
 
-  drvdata = container_of(inode->i_cdev, struct dma_drvdata, cdev);
+  drvdata = container_of(inode->i_cdev, struct hwacc_drvdata, cdev);
   file->private_data = drvdata;
 
+  /* make sure the device is not busy */
+  if (atomic_read(&drvdata->usage_count))
+          return -EBUSY;
+
   // Set up the image buffer set
-  buffer_initlist(&free_list);
-  buffer_initlist(&queued_list);
-  buffer_initlist(&processing_list);
-  buffer_initlist(&complete_list);
+  buffer_initlist(&drvdata->free_list);
+  buffer_initlist(&drvdata->queued_list);
+  buffer_initlist(&drvdata->processing_list);
+  buffer_initlist(&drvdata->complete_list);
 
   // Allocate memory for the scatter-gather tables in the buffer set and put
   // them on the free list.  The actual data will be attached when needed.
@@ -210,15 +227,17 @@ static int dev_open(struct inode *inode, struct file *file)
     }
 
     DEBUG("enqueing buffer set %d\n", i);
-    buffer_enqueue(&free_list, buffer_pool + i);
+    buffer_enqueue(&drvdata->free_list, buffer_pool + i);
   }
   atomic_set(&drvdata->finished_count, 0); // No buffers finished yet
+  atomic_set(&drvdata->usage_count, 1);
   return(0);
 }
 
 static int dev_close(struct inode *inode, struct file *file)
 {
   int i, j;
+  struct hwacc_drvdata *drvdata = file->private_data;
   // TODO: Wait until the DMA engine is done, so we don't write to memory after freeing it
 
   for (i = 0; i < N_DMA_BUFFERSETS; i++) {
@@ -231,7 +250,13 @@ static int dev_close(struct inode *inode, struct file *file)
     }
     kfree(buffer_pool[i].chan_buf_list);
   }
+  /* make sure the queue is empty */
+  if (waitqueue_active(&drvdata->processing_finished)
+      || waitqueue_active(&drvdata->buffer_free_queue)) {
+    dev_err(drvdata->dev, "closing device before clearing out wait queue!\n");
+  }
 
+  atomic_set(&drvdata->usage_count, 0);
   return(0);
 }
 
@@ -324,7 +349,7 @@ void build_sg_chain_2D(const Buffer buf, unsigned long* sg_ptr_base, unsigned lo
  * and flushes the cache. Then it drops the BufferSet into the
  * queue to be pushed to the stencil path DMA engine as soon as it's free.
  */
-int process_image(struct dma_drvdata *drvdata, Buffer *buf_list)
+int process_image(struct hwacc_drvdata *drvdata, Buffer *buf_list)
 {
   BufferSet* src;
   int i, flag;
@@ -345,8 +370,9 @@ int process_image(struct dma_drvdata *drvdata, Buffer *buf_list)
 
   TRACE("process_image: begin\n");
   // Acquire a bufferset to pass through the processing chain
-  wait_event_interruptible(buffer_free_queue, !buffer_listempty(&free_list));
-  src = buffer_dequeue(&free_list);
+  wait_event_interruptible(drvdata->buffer_free_queue,
+                           !buffer_listempty(&drvdata->free_list));
+  src = buffer_dequeue(&drvdata->free_list);
   TRACE("src id is %d\n", src->id);
   TRACE("process_image: got BufferSet\n");
   /* copy buffer address */
@@ -384,7 +410,7 @@ int process_image(struct dma_drvdata *drvdata, Buffer *buf_list)
 
   // Now throw this whole thing into the queue.
   // When the DMA engine is free, it will get pulled off and run.
-  buffer_enqueue(&queued_list, src);
+  buffer_enqueue(&drvdata->queued_list, src);
 
   // Launch a work queue task to write this to the DMA
   retval = schedule_work(&drvdata->launch_work);
@@ -400,12 +426,12 @@ void dma_launch_work(struct work_struct* ws)
   int i;
   struct dma_chan *chan;
   struct chan_buf *chan_buf;
-  struct dma_drvdata *drvdata = container_of(ws, struct dma_drvdata,
+  struct hwacc_drvdata *drvdata = container_of(ws, struct hwacc_drvdata,
                                              launch_work);
 
   TRACE("dma_launch_work: begin\n");
-  while(!buffer_listempty(&queued_list)){
-    buf = buffer_dequeue(&queued_list);
+  while(!buffer_listempty(&drvdata->queued_list)){
+    buf = buffer_dequeue(&drvdata->queued_list);
 
     // Sleep until all the DMA engines are idle or halted (bits 0 and 1)
     // Write should always be idle first, but do all of them to be safe
@@ -445,14 +471,14 @@ void dma_launch_work(struct work_struct* ws)
     TRACE("dma_launch_work: Transfers started\n");
 
     // Move the buffer to the processing list
-    buffer_enqueue(&processing_list, buf);
+    buffer_enqueue(&drvdata->processing_list, buf);
   } // END while(buffers in QUEUED list)
 }
 
 void dma_finished_work(struct work_struct* ws)
 {
   BufferSet* buf;
-  struct dma_drvdata *drvdata = container_of(ws, struct dma_drvdata,
+  struct hwacc_drvdata *drvdata = container_of(ws, struct hwacc_drvdata,
                                              finished_work);
 
   TRACE("dma_finished_work: begin\n");
@@ -470,7 +496,7 @@ void dma_finished_work(struct work_struct* ws)
     // so we can be sure that if they're all >0, we have a frame.
     atomic_dec(&drvdata->finished_count);
 
-    buf = buffer_dequeue(&processing_list);
+    buf = buffer_dequeue(&drvdata->processing_list);
     DEBUG("dma_finished_work: buf: %lx\n", (unsigned long)buf);
 
     // Unmap each of the SG buffers
@@ -487,47 +513,46 @@ void dma_finished_work(struct work_struct* ws)
       //buf->output.height * buf->output.stride * buf->output.depth, DMA_FROM_DEVICE);
     TRACE("dma_finished_work: dma_unmap_single() finished.\n");
     }
-    TRACE("we got it? %d\n", buffer_hasid(&complete_list, buf->id));
-    buffer_enqueue(&complete_list, buf);
+    TRACE("we got it? %d\n", buffer_hasid(&drvdata->complete_list, buf->id));
+    buffer_enqueue(&drvdata->complete_list, buf);
   }
 
   // Both the DMA launcher (which starts new DMA transactions) and the read()
   // operation (which waits for new data) want to know this is finished.
   TRACE("dma_finished_work: DMA read finished\n");
-  wake_up_interruptible_all(&processing_finished);
+  wake_up_interruptible_all(&drvdata->processing_finished);
 }
 
 /* Blocks until a result is complete, and removes the buffer set from the queue.
  * This should be called once for each process_image call.
  */
-void pend_processed(int id)
+void pend_processed(struct hwacc_drvdata *drvdata, int id)
 {
   BufferSet* resultSet;
 
   TRACE("pend_processed: begin for bufferset %d\n", id);
 
   // Block until a completed buffer becomes available
-  wait_event_interruptible(processing_finished, buffer_hasid(&complete_list, id));
-
-  TRACE("we are here!\n");
+  wait_event_interruptible(drvdata->processing_finished,
+                           buffer_hasid(&drvdata->complete_list, id));
 
   // Remove the buffer
-  resultSet = buffer_dequeueid(&complete_list, id);
+  resultSet = buffer_dequeueid(&drvdata->complete_list, id);
   if(resultSet == NULL){
     ERROR("buffer_dequeue for id %d failed!\n", id);
     return;
   }
 
   // Put the buffer set back on the free list
-  buffer_enqueue(&free_list, resultSet);
-  wake_up_interruptible(&buffer_free_queue);
+  buffer_enqueue(&drvdata->free_list, resultSet);
+  wake_up_interruptible(&drvdata->buffer_free_queue);
 
   TRACE("pend_processed: return for bufferset %d\n", id);
 }
 
 long dev_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
 {
-        struct dma_drvdata *drvdata = filp->private_data;
+        struct hwacc_drvdata *drvdata = filp->private_data;
         struct dma_chan *chan;
         size_t bsize = sizeof(Buffer);
         int retval, i;
@@ -560,7 +585,7 @@ long dev_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
                         goto failed;
                 case PEND_PROCESSED:
                         TRACE("ioctl: PEND_PROCESSED\n");
-                        pend_processed(arg);
+                        pend_processed(drvdata, arg);
                         return 0;
                 default:
                         retval = -EINVAL; /* unknown command, return an error */
@@ -573,7 +598,7 @@ failed:
 int dev_mmap(struct file *filp, struct vm_area_struct *vma)
 {
   unsigned long physical_pfn, vsize;
-  struct dma_drvdata *drvdata = filp->private_data;
+  struct hwacc_drvdata *drvdata = filp->private_data;
   uintptr_t controller = (uintptr_t)drvdata->hls_controller;
 
   physical_pfn = (controller >> PAGE_SHIFT) + vma->vm_pgoff; // Physical page
@@ -601,7 +626,7 @@ struct file_operations fops = {
 static irqreturn_t dma_irq_handler(int irq, void *data)
 {
         struct dma_chan *chan = data;
-        struct dma_drvdata *drvdata = chan->drvdata;
+        struct hwacc_drvdata *drvdata = chan->drvdata;
 
         /* we need to distinguish between input and output channel */
         if (chan->input_chan) {
@@ -637,7 +662,7 @@ static irqreturn_t dma_irq_handler(int irq, void *data)
 }
 
 static int dma_chan_probe(struct device_node *node,
-                           struct dma_drvdata *drvdata,
+                           struct hwacc_drvdata *drvdata,
                            int chan_id)
 {
         struct dma_chan *chan;
@@ -724,7 +749,7 @@ static int dma_chan_remove(struct dma_chan *chan)
 
 
 static int dma_child_probe(struct device_node *node,
-                           struct dma_drvdata *drvdata)
+                           struct hwacc_drvdata *drvdata)
 {
         int i, retval, nr_channels = 1;
         struct device *dev = &drvdata->pdev->dev;
@@ -745,7 +770,7 @@ static int dma_child_probe(struct device_node *node,
         return 0;
 }
 
-static int init_dma(struct dma_drvdata *drvdata)
+static int init_dma(struct hwacc_drvdata *drvdata)
 {
         struct platform_device *pdev = drvdata->pdev, *dma;
         struct resource *io;
@@ -795,7 +820,7 @@ failed0:
         return retval;
 }
 
-static int find_set_gpio(struct dma_drvdata *drvdata)
+static int find_set_gpio(struct hwacc_drvdata *drvdata)
 {
         struct platform_device *pdev = drvdata->pdev, *gpio;
         struct device_node *node = NULL;
@@ -847,7 +872,7 @@ failed:
 
 static int hwacc_probe(struct platform_device *pdev)
 {
-        struct dma_drvdata *drvdata;
+        struct hwacc_drvdata *drvdata;
         struct resource *io;
 
         int retval;
@@ -860,7 +885,11 @@ static int hwacc_probe(struct platform_device *pdev)
                 return -ENOMEM;
         }
 
+        /* set up drvdata */
         drvdata->pdev = pdev;
+        atomic_set(&drvdata->usage_count, 0);
+        init_waitqueue_head(&drvdata->processing_finished);
+        init_waitqueue_head(&drvdata->buffer_free_queue);
 
         /* request and map I/O memory  for hwacc*/
         io = platform_get_resource(pdev, IORESOURCE_MEM, 0);
@@ -906,10 +935,9 @@ static int hwacc_probe(struct platform_device *pdev)
         DEBUG("Device registered with major %d, minor: %d\n",
               MAJOR(drvdata->device_num), MINOR(drvdata->device_num));
 
-        /* set up the device and class structures so we show up in sysfs,
+        /* set up the device so we show up in sysfs,
          * and so we have a device we can hand to the DMA request
          */
-        pipe_class = class_create(THIS_MODULE, CLASSNAME);
 
         for (drvdata->dev_index = 0; drvdata->dev_index < MAX_HWACC_MODULE;
              drvdata->dev_index++) {
@@ -955,7 +983,7 @@ failed0:
 static int hwacc_remove(struct platform_device *pdev)
 {
         int i;
-        struct dma_drvdata *drvdata = platform_get_drvdata(pdev);
+        struct hwacc_drvdata *drvdata = platform_get_drvdata(pdev);
 
         /* clear each channel */
         for (i = 0; i < drvdata->nr_channels; i++) {
@@ -992,4 +1020,30 @@ static struct platform_driver hwacc_driver = {
 	.remove = hwacc_remove,
 };
 
-module_platform_driver(hwacc_driver)
+
+static int uevent(struct device *dev, struct kobj_uevent_env *env)
+{
+        add_uevent_var(env, "DEVMODE=%#o", 0766);
+        return 0;
+}
+
+static int __init hwacc_init(void)
+{
+        pipe_class = class_create(THIS_MODULE, CLASSNAME);
+        /* allow non-root access */
+        pipe_class->dev_uevent = uevent;
+        return platform_driver_register(&hwacc_driver);
+}
+
+static void __exit hwacc_exit(void)
+{
+        class_destroy(pipe_class);
+        platform_driver_unregister(&hwacc_driver);
+}
+
+/*
+ * because we need to make sure the device class created first, we need to
+ * manually set the init and exit code instead of using built-in macro
+ */
+module_init(hwacc_init);
+module_exit(hwacc_exit);
