@@ -43,13 +43,10 @@ MODULE_LICENSE("GPL");
 
 #define ACC_CONTROLLER_PAGES 1
 
-struct class *pipe_class;
 
 #define MAX_HWACC_MODULE 8
-int device_usage[MAX_HWACC_MODULE]; /* controls the char dev creation */
 
 #define N_DMA_BUFFERSETS 16 // Number of "buffer set" objects for passing through the queues
-BufferSet buffer_pool[N_DMA_BUFFERSETS];
 
 #define SG_DESC_SIZE 16 // Size of each SG descriptor, in 32-byte words
 #define SG_DESC_BYTES (SG_DESC_SIZE * 4)  // Size of each descriptor in bytes
@@ -74,6 +71,27 @@ BufferSet buffer_pool[N_DMA_BUFFERSETS];
 void dma_launch_work(struct work_struct*);
 void dma_finished_work(struct work_struct*);
 
+struct class *pipe_class;
+int device_usage[MAX_HWACC_MODULE]; /* controls the char dev creation */
+
+static int debug_level = 4;
+module_param(debug_level, int, 0644);
+MODULE_PARM_DESC(debug_level,
+                 "0 is errors only, increasing numbers print more stuff");
+
+// If the DMAs are configured in the multichannel mode,
+// // use this flag to enable 2D transfer mode
+static bool use_2D_mode = true;
+module_param(use_2D_mode, bool, 0644);
+MODULE_PARM_DESC(use_2D_mode, "enable 2D transfer for multichannel mode");
+
+// If the device use the accelerator coherency port (ACP) of PS,
+// // use this flag to enforce cache coherency and to avoid cache flushing
+static bool use_acp = true;
+module_param(use_acp, bool, 0644);
+MODULE_PARM_DESC(use_acp,
+                 "enforce cache coherency, if the device uses ACP");
+
 struct dma_chan {
         struct hwacc_drvdata *drvdata;
         struct device *dev;
@@ -87,7 +105,6 @@ struct dma_chan {
 };
 
 struct hwacc_drvdata {
-        struct device *dev;
         struct platform_device  *pdev;
         struct cdev cdev; /* char device structure */
         struct dma_chan *chan[DMA_MAX_CHANS_PER_DEVICE];
@@ -134,23 +151,13 @@ struct hwacc_drvdata {
          * back to the user
          */
         BufferList complete_list;
+        BufferSet buffer_pool[N_DMA_BUFFERSETS];
 
         /* char dev */
         struct device *pipe_dev;
         dev_t device_num;
         int dev_index;
 };
-
-
-const int debug_level = 4; // 0 is errors only, increasing numbers print more stuff
-
-// If the DMAs are configured in the multichannel mode,
-// use this flag to enable 2D transfer mode
-const bool use_2D_mode = true;
-
-// If the device use the accelerator coherency port (ACP) of PS,
-// use this flag to enforce cache coherency and to avoid cache flushing
-const bool use_acp = true;
 
 /**
  * Probes the DMA engine to confirm that it exists at the assigned memory
@@ -188,76 +195,102 @@ int check_dma_engine(unsigned char* dma_controller)
 
 static int dev_open(struct inode *inode, struct file *file)
 {
-  int i, j;
-  struct hwacc_drvdata *drvdata;
-  struct dma_chan *chan;
-  struct chan_buf *buf;
+        int i, j;
+        struct dma_chan *chan;
+        struct hwacc_drvdata *drvdata = container_of(inode->i_cdev,
+                                                     struct hwacc_drvdata,
+                                                     cdev);
+        struct chan_buf *buf;
 
-  drvdata = container_of(inode->i_cdev, struct hwacc_drvdata, cdev);
-  file->private_data = drvdata;
+        BufferSet *buffer_pool = drvdata->buffer_pool;
+        file->private_data = drvdata;
 
-  /* make sure the device is not busy */
-  if (atomic_read(&drvdata->usage_count))
-          return -EBUSY;
+        /* allocate pages */
+        for (i = 0; i < N_DMA_BUFFERSETS; i++) {
+                for (j = 0; j < drvdata->nr_channels; j++) {
+                        chan = drvdata->chan[j];
+                        buf = &buffer_pool[i].chan_buf_list[j];
+                        buf->sg = (unsigned long*)
+                                  __get_free_pages(GFP_KERNEL, SG_PAGEORDER);
+                        if (!buf->sg) {
+                                ERROR("failed to allocate memory for SG table"
+                                      "chan %d\n", chan->id);
+                                return -ENOMEM;
+                        }
+                        // TODO: add fail case
+                }
+        }
 
-  // Set up the image buffer set
-  buffer_initlist(&drvdata->free_list);
-  buffer_initlist(&drvdata->queued_list);
-  buffer_initlist(&drvdata->processing_list);
-  buffer_initlist(&drvdata->complete_list);
 
-  // Allocate memory for the scatter-gather tables in the buffer set and put
-  // them on the free list.  The actual data will be attached when needed.
-  for (i = 0; i < N_DMA_BUFFERSETS; i++) {
-    buffer_pool[i].id = i;
-    buffer_pool[i].nr_channels = drvdata->nr_channels;
-
-    buffer_pool[i].chan_buf_list = kzalloc(sizeof (struct chan_buf),
-                                           GFP_KERNEL);
-
-    for (j = 0; j < drvdata->nr_channels; j++) {
-      chan = drvdata->chan[j];
-      buf = &buffer_pool[i].chan_buf_list[j];
-      buf->sg = (unsigned long*) __get_free_pages(GFP_KERNEL, SG_PAGEORDER);
-      if (!buf->sg) {
-        ERROR("failed to allocate memory for SG table chan %d\n", chan->id);
-        return -ENOMEM;
-      }
-      // TODO: add fail case
-    }
-
-    DEBUG("enqueing buffer set %d\n", i);
-    buffer_enqueue(&drvdata->free_list, buffer_pool + i);
-  }
-  atomic_set(&drvdata->finished_count, 0); // No buffers finished yet
-  atomic_set(&drvdata->usage_count, 1);
+        /* make sure the device is not busy */
+        if (atomic_read(&drvdata->usage_count))
+                return -EBUSY;
+        atomic_set(&drvdata->finished_count, 0); // No buffers finished yet
+        atomic_set(&drvdata->usage_count, 1);
   return(0);
 }
 
 static int dev_close(struct inode *inode, struct file *file)
 {
-  int i, j;
-  struct hwacc_drvdata *drvdata = file->private_data;
-  // TODO: Wait until the DMA engine is done, so we don't write to memory after freeing it
+        int i, j;
+        struct hwacc_drvdata *drvdata = file->private_data;
 
-  for (i = 0; i < N_DMA_BUFFERSETS; i++) {
-    /* becase no consumers are deleting nodes, we are safe to traverse without
-     * deleting the nodes
-     */
-    for (j = 0; j < buffer_pool[i].nr_channels; j++) {
-      free_pages((unsigned long) buffer_pool[i].chan_buf_list[j].sg,
-                 SG_PAGEORDER);
-    }
-    kfree(buffer_pool[i].chan_buf_list);
-  }
-  /* make sure the queue is empty */
-  if (waitqueue_active(&drvdata->processing_finished)
-      || waitqueue_active(&drvdata->buffer_free_queue)) {
-    dev_err(drvdata->dev, "closing device before clearing out wait queue!\n");
-  }
+        /* make sure the queue is empty */
+        if (waitqueue_active(&drvdata->processing_finished)
+        || waitqueue_active(&drvdata->buffer_free_queue)) {
+                dev_err(drvdata->pipe_dev,
+                "closing device before clearing out wait queue!\n");
+        }
 
-  atomic_set(&drvdata->usage_count, 0);
-  return(0);
+        /* free all the pages */
+        /*
+         * TODO: Wait until the DMA engine is done,
+         * so we don't write to memory after freeing it
+         */
+        for (i = 0; i < N_DMA_BUFFERSETS; i++) {
+                /* becase no consumers are deleting nodes,
+                 * we are safe to traverse without deleting the nodes
+                */
+                for (j = 0; j < drvdata->buffer_pool[i].nr_channels; j++) {
+                        free_pages((unsigned long) drvdata->buffer_pool[i]
+                                   .chan_buf_list[j].sg,
+                                   SG_PAGEORDER);
+                }
+        }
+
+        atomic_set(&drvdata->usage_count, 0);
+        return(0);
+}
+
+static int setup_buffer_list(struct hwacc_drvdata *drvdata)
+{
+        int i;
+        struct chan_buf *buf;
+        BufferSet *buffer_pool = drvdata->buffer_pool;
+
+        /* set up the image buffer set */
+        buffer_initlist(&drvdata->free_list);
+        buffer_initlist(&drvdata->queued_list);
+        buffer_initlist(&drvdata->processing_list);
+        buffer_initlist(&drvdata->complete_list);
+
+        /**
+         * Allocate memory for the scatter-gather tables in the buffer set and
+         * put them on the free list.
+         * The actual data will be attached when needed.
+         */
+        for (i = 0; i < N_DMA_BUFFERSETS; i++) {
+                buffer_pool[i].id = i;
+                buffer_pool[i].nr_channels = drvdata->nr_channels;
+
+                buffer_pool[i].chan_buf_list = devm_kzalloc(&drvdata->pdev->dev,
+                                                            sizeof (*buf),
+                                                            GFP_KERNEL);
+
+                DEBUG("enqueing buffer set %d\n", i);
+                buffer_enqueue(&drvdata->free_list, buffer_pool + i);
+        }
+        return 0;
 }
 
 /* Builds a scatter-gather descriptor chain for a buffer.
@@ -381,13 +414,13 @@ int process_image(struct hwacc_drvdata *drvdata, Buffer *buf_list)
   }
 
   // Set up the scatter-gather descriptor chains
-  if (use_2D_mode) {
-    for (i = 0; i < drvdata->nr_channels; i++) {
-      chan_buf = &src->chan_buf_list[i];
+  for (i = 0; i < drvdata->nr_channels; i++) {
+    chan_buf = &src->chan_buf_list[i];
+    if (use_2D_mode) {
       build_sg_chain_2D(chan_buf->buf, chan_buf->sg, &chan_buf->sg_phys);
+    } else {
+      build_sg_chain(chan_buf->buf, chan_buf->sg, &chan_buf->sg_phys);
     }
-  } else {
-    build_sg_chain(chan_buf->buf, chan_buf->sg, &chan_buf->sg_phys);
   }
 
   // Map the buffers for DMA
@@ -732,10 +765,8 @@ failed1:
         free_irq(chan->irq, chan);
 
 failed0:
-        kfree(chan);
         return retval;
 }
-
 
 static int dma_chan_remove(struct dma_chan *chan)
 {
@@ -825,34 +856,15 @@ static int find_set_gpio(struct hwacc_drvdata *drvdata)
         struct platform_device *pdev = drvdata->pdev, *gpio;
         struct device_node *node = NULL;
         struct resource *io;
-        const __be32 *ip;
-        int i, width, retval;
-
-        // TODO: for no it only tries to search 3 times
-        for (i = 0; i < 3; i++) {
-                node = of_find_compatible_node(node, NULL,
-                                               "xlnx,xps-gpio-1.00.a");
-                if (!node)
-                        break;
-                // TODO: use a phandle for this
-                ip = of_get_property(node, "xlnx,gpio2-width", NULL);
-                if (!ip) {
-                        DEBUG("cannot find gpio width\n");
-                        retval = -ENODEV;
-                        goto failed;
-                }
-                width = be32_to_cpup(ip);
-                DEBUG("width is %d\n", width);
-                if (width == 0x20)
-                        break;
-        }
-        if (!node) {
-                DEBUG("no node found\n");
-                retval = -ENODEV;
-                goto failed;
-        }
+        int retval;
 
         /* we foudn the actual gpio node */
+        node = of_parse_phandle(pdev->dev.of_node, "gpio", 0);;
+        if (!node) {
+            dev_err(&pdev->dev, "gpio phandle not found\n");
+            retval = -ENODEV;
+            goto failed;
+        }
         gpio = of_find_device_by_node(node);
         io = platform_get_resource(gpio, IORESOURCE_MEM, 0);
         drvdata->gpio_controller = devm_ioremap_resource(&pdev->dev, io);
@@ -920,6 +932,11 @@ static int hwacc_probe(struct platform_device *pdev)
         if (retval < 0)
                 goto failed0;
 
+        /* set up buffer list */
+        retval = setup_buffer_list(drvdata);
+        if (retval < 0)
+                goto failed0;
+
         /* manually setup the work queue because we want to pass drvdata
          * into the callback.
          * corresponding structures that get put in the queues.
@@ -975,8 +992,7 @@ failed1:
         unregister_chrdev_region(drvdata->device_num, 1);
 
 failed0:
-        /* free drvdata the last */
-        kfree(drvdata);
+        /* drvdata is allocated to pdev->dev, no need to clean up */
         return retval;
 }
 
@@ -994,7 +1010,6 @@ static int hwacc_remove(struct platform_device *pdev)
         /* all ioremap are call using devm_, hence no manual cleanup needed */
 
         device_unregister(drvdata->pipe_dev);
-        class_destroy(pipe_class);
         cdev_del(&drvdata->cdev);
         unregister_chrdev_region(drvdata->device_num, 1);
 
@@ -1037,8 +1052,9 @@ static int __init hwacc_init(void)
 
 static void __exit hwacc_exit(void)
 {
-        class_destroy(pipe_class);
         platform_driver_unregister(&hwacc_driver);
+        /* class destory has to happen after unregister */
+        class_destroy(pipe_class);
 }
 
 /*

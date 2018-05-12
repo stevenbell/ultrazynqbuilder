@@ -20,7 +20,19 @@ cp -r project_skeleton $PROJECT_DIR
 cp bootgen_static.bif $PROJECT_DIR
 cp regs.init $PROJECT_DIR
 
+# get the petalinux dir
+PETALINUX_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
+DRIVER_DIR=$PETALINUX_DIR/../drivers
+
 pushd $PROJECT_DIR
+
+# link every driver files over
+for i in $DRIVER_DIR/*; do
+    if [ "${i}" != "${i%.c}" ] || [ "${i}" != "${i%.h}" ] ; then
+        ln -s $i project-spec/meta-user/recipes-modules/hwacc/files/
+        ln -s $i project-spec/meta-user/recipes-modules/cmabuffer/files/
+    fi
+done
 
 # Fix the config TMPDIR
 sed -i "s,<PETALINUX_PROJECT_ROOT>,$PROJECT_DIR," project-spec/configs/config
