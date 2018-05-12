@@ -28,7 +28,7 @@ typedef struct BufferSet {
   // TODO: what if the tap width is zero?
   //unsigned char tap_vals[$//{tapwidth}]; // Data that describes the tap state
   struct BufferSet* next; // Next buffer set in chain, if any
-
+  /* length of chan_buf_list, i.e., number of channels */
   int nr_channels;
 } BufferSet;
 

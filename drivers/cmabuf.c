@@ -137,6 +137,13 @@ struct file_operations fops = {
   .mmap = dev_mmap,
 };
 
+
+static int uevent(struct device *dev, struct kobj_uevent_env *env)
+{
+        add_uevent_var(env, "DEVMODE=%#o", 0766);
+        return 0;
+}
+
 static int cmabuf_driver_init(void)
 {
   // Get a single character device number
@@ -146,6 +153,7 @@ static int cmabuf_driver_init(void)
   // Set up the device and class structures so we show up in sysfs,
   // and so we have a device we can hand to the DMA request
   cmabuf_class = class_create(THIS_MODULE, CLASSNAME);
+  cmabuf_class->dev_uevent = uevent;
 
   // If we had multiple devices, we could break it apart with
   // MAJOR(device_num), and then add in our own minor number, with
