@@ -84,7 +84,7 @@ for key in overlay:
 			overlay[node['outputto']]['hls-node'] = node_name
 			overlay[node['outputto']]['direction'] += 2
 
-			
+
 # creating dt overlay
 dt_overlay = ""
 for key in sorted(overlay.iterkeys()):
@@ -97,7 +97,7 @@ for key in sorted(overlay.iterkeys()):
 		dt_overlay += "\n\t" + prop_name_hls_ref + " = <&" + overlay[key]['hls-node'] + ">;"
 	else:
 		dt_overlay += "\n\tcompatible = \"" + hls_compatible_string + "\";"
-
+		dt_overlay += "\n\tgpio = <&axi_gpio_1>;"
 		#input dmas
 		if len(overlay[key]['in-dmas']) == 0:
 			dt_overlay += "\n\t" + prop_name_dmas_in + " = <empty>;"
@@ -121,9 +121,9 @@ for key in sorted(overlay.iterkeys()):
 					dt_overlay += ", "
 				else:
 					dt_overlay += ";"
-		
 
-	dt_overlay += "\n};\n"	
+
+	dt_overlay += "\n};\n"
 
 with open(dts_file_path, 'a') as dts_file:
 	dts_file.write(dt_overlay)
