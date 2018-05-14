@@ -14,13 +14,13 @@ reserved-memory {
     #address-cells = <2>;
     #size-cells = <2>;
     ranges;
-    rproc_0_reserved: rproc@3ed000000 {
+    rproc_0_reserved: rproc@3e0000000 {
         no-map;
         /* DDR memory reserved for RPU firmware.
          * If you want to use predefined shared memory,
          * you should also reserved them here.
          */
-        reg = <0x0 0x3ed00000 0x0 0x1000000>;
+        reg = <0x0 0x3e000000 0x0 0x1000000>;
     };
 };
 
@@ -59,9 +59,9 @@ amba {
 
     /* DRAM reserved for executable
      * the address must match the reserved memory section above */
-    elf_ddr_0: ddr@3ed00000 {
+    elf_ddr_0: ddr@3e000000 {
         compatible = "mmio-sram";
-        reg = <0 0x3ed00000 0x0 0x100000>;
+        reg = <0 0x3e000000 0x0 0x100000>;
     };
 
     /* And finally the actual remoteproc entry */
@@ -82,6 +82,12 @@ amba {
         interrupt-parent = <&gic>;
         interrupts = <0 29 4>;
     } ;
+
+    /* Shared memory */
+    shm0: shm@0 {
+        compatible = "shm_uio";
+        reg = <0x0 0x3e800000 0x0 0x100000>;
+    };
 
 };
 
@@ -277,6 +283,10 @@ amba {
 };
 
 &fclk1 {
+  status = "okay";
+};
+
+&fclk2 {
   status = "okay";
 };
 
