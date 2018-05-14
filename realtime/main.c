@@ -2,8 +2,7 @@
  * Top-level application code for R5 runtime which controls the camera
  * and peripherals.
  * If this is built to run along with Linux, be sure to set the USING_AMP
- * define, or else it'll try to initialize and shutdown the platform (both of
- * which will make you sad).
+ * define so that shared-memory communication works.
  */
 
 #include <stdio.h>
@@ -15,6 +14,7 @@
 #include "ttc_clock.h"
 #include "mpu9250.h"
 #include "imx219_cam.h"
+#include "requestqueue.h"
 
 const u32 GPIO_LEDS = XPAR_AXI_GPIO_0_BASEADDR;
 const u32 GPIO_CAMERA = (XPAR_AXI_GPIO_0_BASEADDR + 0x8);
@@ -25,9 +25,10 @@ int main()
   u32* gpio_cam = (u32*)GPIO_CAMERA;
   ttc_clk_init();
 
-#ifndef USING_AMP
-  init_platform();
+#ifdef USING_AMP
+  requestqueue_init();
 #endif
+  init_platform(); // Interrupts and such
 
   // Blink for 5 seconds
   for(int i = 0; i < 20; i++){
@@ -69,6 +70,8 @@ int main()
   u32 last_cam_time[2] = {0, 0};
 
   while(1){
+    requestqueue_check();
+
     if(last_cam_time[0] != cam0.finished_time){
       // cam0 has a new frame, handle it
       last_cam_time[0] = cam0.finished_time;
@@ -127,10 +130,10 @@ int main()
     }
   }
 
-
-#ifndef USING_AMP
-  cleanup_platform();
+#ifdef USING_AMP
+  requestqueue_close();
 #endif
+  cleanup_platform();
 
   return 0;
 }

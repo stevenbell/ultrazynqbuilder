@@ -7,6 +7,8 @@
 
 #include "xil_types.h"
 
+typedef u32 Time; // for now, might become a struct later
+
 // Definitions for TTC1
 // We only use one of the three counters, and don't touch the clock settings
 // See https://www.xilinx.com/html_docs/registers/ug1087/mod___ttc.html for details
