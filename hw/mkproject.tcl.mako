@@ -544,7 +544,7 @@ CONFIG.C_GPIO_WIDTH {3} \
 
   # Create the csirx module
   set_property ip_repo_paths "${module['path']} [get_property  ip_repo_paths [current_project]]" [current_project]
-  update_ip_catalog  
+  update_ip_catalog
   set ${module['name']}_csirx [ create_bd_cell -type ip -vlnv ${module['vlnv']} ${module['name']}_csirx ]
 
   <% irqs.append(module['name'] + "_csirx/csi_intr")  %>
@@ -600,7 +600,7 @@ CONFIG.c_sg_include_stscntrl_strm {0} \
 
   # Instantiate the HLS module
   set_property ip_repo_paths "${module['path']} [get_property  ip_repo_paths [current_project]]" [current_project]
-  update_ip_catalog  
+  update_ip_catalog
   set ${module['name']} [ create_bd_cell -type ip -vlnv ${module['vlnv']} ${module['name']} ]
 
   # Use block automation, but connect the clock to the high-speed data clock
@@ -626,7 +626,7 @@ CONFIG.c_sg_include_stscntrl_strm {0} \
       % else:
   # Connect the IP core directly to the DMA
   set ${module['name']}_${stream['name']}_connection ${module['name']}/${stream['name']}
-      % endif  
+      % endif
     % elif stream['type'] == 'output':
       % if stream['depth'] != 2:
   # Output stream width is ${stream['depth']}, so we need a dwidth converter
@@ -645,7 +645,7 @@ CONFIG.c_sg_include_stscntrl_strm {0} \
       % else:
   # Connect the IP core directly to the DMA
   set ${module['name']}_${stream['name']}_connection ${module['name']}/${stream['name']}
-      % endif  
+      % endif
     % endif
   % endfor
 
@@ -676,21 +676,25 @@ CONFIG.c_sg_include_stscntrl_strm {0} \
     % elif connection['type'] == 'hls':
 ## HACK: just get the first input
 <%
-  streams = [s for s in connection['streams'] if s['type'] == 'input']
+  port_name = module["outputto"].split('.')[-1]
+  streams = [s for s in connection['streams']
+             if s['type'] == 'input' and s["name"] == port_name]
   stream = streams[0]
 %>
   set dstpin $${connection['name']}_${stream['name']}_connection
     %endif
     ## That's it; only HLS and DMA can take input
 
-    
     % if module['type'] == 'dma':
       ## Configure the DMA MM2S channel
   set_property -dict [list CONFIG.c_include_mm2s {1} CONFIG.c_m_axis_mm2s_tdata_width {16}] [get_bd_cells ${module['name']}]
   apply_bd_automation -rule xilinx.com:bd_rule:axi4 -config "Slave /zynq_ultra_ps_e_0/S_AXI_HPC0_FPD intc_ip /data_xconn Clk_xbar $dataclk Clk_master $dataclk Clk_slave $dataclk "  [get_bd_intf_pins ${module['name']}/M_AXI_MM2S]
   set srcpin ${module['name']}/M_AXIS_MM2S
   <% irqs.append(module['name'] + "/mm2s_introut")  %>
-
+  % if not module["out_connected"]:
+    ## disable the output channel otherwise the dtc is going to error out
+    set_property -dict [list CONFIG.c_include_s2mm {0}] [get_bd_cells ${module["name"]}]
+  %endif
     % elif module['type'] == 'hls':
 ## HACK: just get the first output
 <%
