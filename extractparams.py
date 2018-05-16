@@ -54,6 +54,36 @@ for module in params['hw']:
 
     module['streams'].append(stream)
 
+# second pass
+for module in params["hw"]:
+  if module["type"] == "hls":
+    # we need to collect all the DMA's that are pointing to it
+    input_dmas = []
+    for dma in params["hw"]:
+      if dma["type"] != "dma" or dma["outputto"] != module["name"]:
+        continue
+      # we have found an input dma channel
+      input_dmas.append(dma)
+    input_streams = [entry for entry in module["streams"]
+                     if entry["type"] == "input"]
+    # we need to make sure that the input list matches with the HLS IP
+    assert(len(input_dmas) == len(input_streams))
+    # rename the outputto property
+    for i in range(len(input_dmas)):
+      # updating the object by reference
+      # the format will be hls_module.arg_#
+      input_dmas[i]["outputto"] += "." + input_streams[i]["name"]
+
+# thid pass to see if there is any input only dma
+for module in params["hw"]:
+    if module["type"] == "dma":
+        out_connected = False
+        for m in params["hw"]:
+            if m["type"] == "hls" and m["outputto"] == module["name"]:
+                out_connected = True
+                break
+        module["out_connected"] = out_connected
+
 outfile = open(outpath, 'w')
 outfile.write(yaml.dump(params))
 outfile.close()
