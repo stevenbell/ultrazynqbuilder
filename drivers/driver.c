@@ -726,7 +726,8 @@ static int dma_chan_probe(struct device_node *node,
         chan->irq = irq_of_parse_and_map(node, 0);
         retval = request_irq(chan->irq, dma_irq_handler, IRQF_SHARED,
                              "dma-irq-handler", chan);
-        DEBUG("chan: %d irq->%d", chan_id, chan->irq);
+        DEBUG("chan: %d irq->%d input?: %d\n", chan_id, chan->irq,
+              chan->input_chan);
         if (retval < 0) {
                 dev_err(dev, "request_irq() failed for chann id: %d\n",
                         chan_id);
@@ -806,45 +807,73 @@ static int init_dma(struct hwacc_drvdata *drvdata)
         struct platform_device *pdev = drvdata->pdev, *dma;
         struct resource *io;
         struct device_node *child, *dma_node;
-        int i, j, retval;
-        static const char *names[] = {"dmas-in", "dmas-out"};
+        struct dma_chan *temp;
+        int i, retval;
         /*
          * find the phandle for dma. we need to read both dmas-in and
-         * dmas-out. notice that thanks to the way bd is generated,
          * we don't need to actually distinguish the difference between
          * in or out as a single read/write dma will only have one channel.
          */
-        for (i = 0; i < 2; i++) {
-                j = 0;
-                /* simply iterate through the list */
-                while ((dma_node = of_parse_phandle(pdev->dev.of_node,
-                                                   names[i], j++))) {
-                        dma = of_find_device_by_node(dma_node);
-                        if (!dma) {
-                                retval = -ENODEV;
-                                goto failed0;
-                        }
-                        /* request and map I/O memory  for dma */
-                        io = platform_get_resource(dma, IORESOURCE_MEM, 0);
-                        drvdata->chan_controller =
-                                devm_ioremap_resource(&pdev->dev, io);
-
-                        if (!drvdata->chan_controller) {
-                                retval = -ENOMEM;
-                                goto failed0;
-                        }
-
-                        /* initialize channels */
-                        for_each_child_of_node(dma_node, child) {
-                                retval = dma_child_probe(child, drvdata);
-                                if (retval < 0)
-                                        goto failed1;
-                        }
-
-                        of_node_put(dma_node);
+        /* simply iterate through the list */
+        i = 0;
+        while ((dma_node = of_parse_phandle(pdev->dev.of_node,
+                                            "dmas", i++))) {
+                dma = of_find_device_by_node(dma_node);
+                if (!dma) {
+                        retval = -ENODEV;
+                        goto failed0;
                 }
+                /* request and map I/O memory  for dma */
+                io = platform_get_resource(dma, IORESOURCE_MEM, 0);
+                drvdata->chan_controller =
+                        devm_ioremap_resource(&pdev->dev, io);
+
+                if (IS_ERR(drvdata->chan_controller)) {
+                        retval = -ENOMEM;
+                        goto failed0;
+                }
+
+                /* initialize channels */
+                for_each_child_of_node(dma_node, child) {
+                        retval = dma_child_probe(child, drvdata);
+                        if (retval < 0)
+                                goto failed1;
+                }
+
+                of_node_put(dma_node);
         }
 
+        /*
+         * because we only have one output, we can simply make the rule that
+         * the last channel/buffer is the output channel. If we're heading
+         * to multi-output in the future, we need to have annother ioctl
+         * command to reorder the channels and additional entry in the device
+         * tree overlay to indicate the dma index.
+         */
+        for (i = 0; i< drvdata->nr_channels; i++) {
+            if ((!drvdata->chan[i]->input_chan)
+                && (i != drvdata->nr_channels - 1)) {
+                /*
+                 * we've found output data channel and it's not the last
+                 * one. swap them
+                 */
+                temp = drvdata->chan[drvdata->nr_channels - 1];
+                drvdata->chan[i]->id = temp->id;
+                temp->id = i;
+                drvdata->chan[drvdata->nr_channels - 1] = drvdata->chan[i];
+                drvdata->chan[i] = temp;
+                DEBUG("swap between chan: %d and chan %d\n", i,
+                      drvdata->nr_channels - 1);
+                break;
+            }
+        }
+        /* double check */
+        if (drvdata->chan[drvdata->nr_channels - 1]->input_chan) {
+            ERROR("last channel is not output channel\n");
+            retval = -ENXIO;
+            goto failed0;
+        }
+        of_node_put(dma_node);
         return 0;
 
 failed1:

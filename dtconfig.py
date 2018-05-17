@@ -61,6 +61,7 @@ for hw_node in cfg['hw']:
 				overlay[node_name]['direction'] = 0
 				overlay[node_name]['hls-node'] = ""
 			else: # node_type == 'hls'
+                                # not using set because we want to perserve order
 				overlay[node_name]['dmas'] = []
 
 # filling in overlay info
@@ -74,12 +75,14 @@ for key in overlay:
                         overlay[node_name]['direction'] += 1
                         outputto = node["outputto"].split('.')[0]
                         overlay[node_name]['hls-node'] = outputto
-                        overlay[outputto]['dmas'].append(node_name)
+                        if node_name not in overlay[outputto]['dmas']:
+                            overlay[outputto]['dmas'].append(node_name)
 	else:
 		if node['outputto'] in overlay and overlay[node['outputto']]['definition']['type'] == 'dma':
-			overlay[node_name]['dmas'].append(node['outputto'])
-			overlay[node['outputto']]['hls-node'] = node_name
-			overlay[node['outputto']]['direction'] += 2
+                    if node['outputto'] not in overlay[node_name]['dmas']:
+                            overlay[node_name]['dmas'].append(node['outputto'])
+                            overlay[node['outputto']]['hls-node'] = node_name
+                            overlay[node['outputto']]['direction'] += 2
 
 
 # creating dt overlay
