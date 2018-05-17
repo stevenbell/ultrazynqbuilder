@@ -116,6 +116,8 @@ bool buffer_hasid(BufferList* list, int id)
     }
   }
   up(&(list->mutex));
+  if (found)
+    printk("buffer has id: %d\n", s->id);
   return found;
 }
 
