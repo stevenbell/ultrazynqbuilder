@@ -16,10 +16,7 @@ hls_compatible_string = "hls-target"
 dma_compatible_string = "hls-dma"
 
 # name of hls node's property that references input dmas
-prop_name_dmas_in = "dmas-in"
-
-# name of hls node's property that references output dmas
-prop_name_dmas_out = "dmas-out"
+prop_name_dmas = "dmas"
 
 # name of dma node's property that references parent hls node
 prop_name_hls_ref = "hls-node"
@@ -64,8 +61,7 @@ for hw_node in cfg['hw']:
 				overlay[node_name]['direction'] = 0
 				overlay[node_name]['hls-node'] = ""
 			else: # node_type == 'hls'
-				overlay[node_name]['in-dmas'] = []
-				overlay[node_name]['out-dmas'] = []
+				overlay[node_name]['dmas'] = []
 
 # filling in overlay info
 for key in overlay:
@@ -75,12 +71,13 @@ for key in overlay:
 
 	if(node_type == 'dma'):
 		if 'outputto' in node:
-			overlay[node_name]['direction'] += 1
-			overlay[node_name]['hls-node'] = node["outputto"]
-			overlay[node['outputto']]['in-dmas'].append(node_name)
+                        overlay[node_name]['direction'] += 1
+                        outputto = node["outputto"].split('.')[0]
+                        overlay[node_name]['hls-node'] = outputto
+                        overlay[outputto]['dmas'].append(node_name)
 	else:
 		if node['outputto'] in overlay and overlay[node['outputto']]['definition']['type'] == 'dma':
-			overlay[node_name]['out-dmas'].append(node['outputto'])
+			overlay[node_name]['dmas'].append(node['outputto'])
 			overlay[node['outputto']]['hls-node'] = node_name
 			overlay[node['outputto']]['direction'] += 2
 
@@ -99,29 +96,16 @@ for key in sorted(overlay.iterkeys()):
 		dt_overlay += "\n\tcompatible = \"" + hls_compatible_string + "\";"
 		dt_overlay += "\n\tgpio = <&axi_gpio_1>;"
 		#input dmas
-		if len(overlay[key]['in-dmas']) == 0:
-			dt_overlay += "\n\t" + prop_name_dmas_in + " = <empty>;"
+		if len(overlay[key]['dmas']) == 0:
+			dt_overlay += "\n\t" + prop_name_dmas + " = <empty>;"
 		else:
-			dt_overlay += "\n\t" + prop_name_dmas_in + " = "
-			for counter, value in enumerate(overlay[key]['in-dmas']):
+			dt_overlay += "\n\t" + prop_name_dmas + " = "
+			for counter, value in enumerate(overlay[key]['dmas']):
 				dt_overlay += "<&" + value + ">"
-				if(counter < len(overlay[key]['in-dmas']) - 1):
+				if(counter < len(overlay[key]['dmas']) - 1):
 					dt_overlay += ", "
 				else:
 					dt_overlay += ";"
-
-		#output dmas
-		if len(overlay[key]['out-dmas']) == 0:
-			dt_overlay += "\n\t" + prop_name_dmas_out + " = <empty>;"
-		else:
-			dt_overlay += "\n\t" + prop_name_dmas_out  + " = "
-			for counter, value in enumerate(overlay[key]['out-dmas']):
-				dt_overlay += "<&" + value + ">"
-				if(counter < len(overlay[key]['out-dmas']) - 1):
-					dt_overlay += ", "
-				else:
-					dt_overlay += ";"
-
 
 	dt_overlay += "\n};\n"
 

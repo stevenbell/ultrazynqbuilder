@@ -806,37 +806,44 @@ static int init_dma(struct hwacc_drvdata *drvdata)
         struct platform_device *pdev = drvdata->pdev, *dma;
         struct resource *io;
         struct device_node *child, *dma_node;
-        int i, retval;
+        int i, j, retval;
+        static const char *names[] = {"dmas-in", "dmas-out"};
+        /*
+         * find the phandle for dma. we need to read both dmas-in and
+         * dmas-out. notice that thanks to the way bd is generated,
+         * we don't need to actually distinguish the difference between
+         * in or out as a single read/write dma will only have one channel.
+         */
+        for (i = 0; i < 2; i++) {
+                j = 0;
+                /* simply iterate through the list */
+                while ((dma_node = of_parse_phandle(pdev->dev.of_node,
+                                                   names[i], j++))) {
+                        dma = of_find_device_by_node(dma_node);
+                        if (!dma) {
+                                retval = -ENODEV;
+                                goto failed0;
+                        }
+                        /* request and map I/O memory  for dma */
+                        io = platform_get_resource(dma, IORESOURCE_MEM, 0);
+                        drvdata->chan_controller =
+                                devm_ioremap_resource(&pdev->dev, io);
 
-        /* find the phandle for dma */
-        /* NOTE: currently only one DMA is supported */
-        dma_node = of_parse_phandle(pdev->dev.of_node, "dmas-in", 0);
-        if (!dma_node) {
-                retval = -ENODEV;
-                goto failed0;
-        }
-        dma = of_find_device_by_node(dma_node);
-        if (!dma) {
-                retval = -ENODEV;
-                goto failed0;
-        }
-        /* request and map I/O memory  for dma */
-        io = platform_get_resource(dma, IORESOURCE_MEM, 0);
-        drvdata->chan_controller = devm_ioremap_resource(&pdev->dev, io);
+                        if (!drvdata->chan_controller) {
+                                retval = -ENOMEM;
+                                goto failed0;
+                        }
 
-        if (!drvdata->chan_controller) {
-                retval = -ENOMEM;
-                goto failed0;
-        }
+                        /* initialize channels */
+                        for_each_child_of_node(dma_node, child) {
+                                retval = dma_child_probe(child, drvdata);
+                                if (retval < 0)
+                                        goto failed1;
+                        }
 
-        /* initialize channels */
-        for_each_child_of_node(dma_node, child) {
-                retval = dma_child_probe(child, drvdata);
-                if (retval < 0)
-                        goto failed1;
+                        of_node_put(dma_node);
+                }
         }
-
-        of_node_put(dma_node);
 
         return 0;
 
