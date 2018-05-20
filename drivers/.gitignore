@@ -6,10 +6,8 @@
 *.mod.c
 Module.symvers
 modules.order
-
-# generated file by drivergen.py
-driver.c
-dma_bufferset.h
+.cache.mk
+*.o.d
 
 # generated file during building module
 .tmp_versions/
