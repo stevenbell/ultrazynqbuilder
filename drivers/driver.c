@@ -265,7 +265,6 @@ static int dev_close(struct inode *inode, struct file *file)
 static int setup_buffer_list(struct hwacc_drvdata *drvdata)
 {
         int i;
-        struct chan_buf *buf;
         BufferSet *buffer_pool = drvdata->buffer_pool;
 
         /* set up the image buffer set */
@@ -283,9 +282,10 @@ static int setup_buffer_list(struct hwacc_drvdata *drvdata)
                 buffer_pool[i].id = i;
                 buffer_pool[i].nr_channels = drvdata->nr_channels;
 
-                buffer_pool[i].chan_buf_list = devm_kzalloc(&drvdata->pdev->dev,
-                                                            sizeof (*buf),
-                                                            GFP_KERNEL);
+                buffer_pool[i].chan_buf_list = \
+                        devm_kzalloc(&drvdata->pdev->dev,
+                        sizeof (*buffer_pool[i].chan_buf_list),
+                        GFP_KERNEL);
 
                 DEBUG("enqueing buffer set %d\n", i);
                 buffer_enqueue(&drvdata->free_list, buffer_pool + i);
