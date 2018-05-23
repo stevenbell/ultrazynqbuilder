@@ -19,6 +19,8 @@ fi
 cp -r project_skeleton $PROJECT_DIR
 cp bootgen_static.bif $PROJECT_DIR
 cp regs.init $PROJECT_DIR
+cp ../hwconfig.user $PROJECT_DIR
+cp ../dtconfig.py $PROJECT_DIR
 
 # get the petalinux dir
 PETALINUX_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
@@ -36,6 +38,9 @@ done
 
 # Fix the config TMPDIR
 sed -i "s,<PETALINUX_PROJECT_ROOT>,$PROJECT_DIR," project-spec/configs/config
+
+# Create device tree overlay
+python dtconfig.py hwconfig.user project-spec/meta-user/recipes-bsp/device-tree/files/system-user-overlay.dtsi
 
 # Make an empty directory to Petalinux doesn't choke on the import
 mkdir project-spec/hw-description
