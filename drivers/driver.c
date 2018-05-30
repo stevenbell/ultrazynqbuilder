@@ -200,7 +200,6 @@ static int dev_open(struct inode *inode, struct file *file)
         struct hwacc_drvdata *drvdata = container_of(inode->i_cdev,
                                                      struct hwacc_drvdata,
                                                      cdev);
-        struct chan_buf *buf;
 
         BufferSet *buffer_pool = drvdata->buffer_pool;
         file->private_data = drvdata;
@@ -209,10 +208,9 @@ static int dev_open(struct inode *inode, struct file *file)
         for (i = 0; i < N_DMA_BUFFERSETS; i++) {
                 for (j = 0; j < drvdata->nr_channels; j++) {
                         chan = drvdata->chan[j];
-                        buf = &buffer_pool[i].chan_buf_list[j];
-                        buf->sg = (unsigned long*)
+                        buffer_pool[i].chan_buf_list[j].sg = (unsigned long*) \
                                   __get_free_pages(GFP_KERNEL, SG_PAGEORDER);
-                        if (!buf->sg) {
+                        if (!buffer_pool[i].chan_buf_list[j].sg) {
                                 ERROR("failed to allocate memory for SG table"
                                       "chan %d\n", chan->id);
                                 return -ENOMEM;
@@ -284,7 +282,7 @@ static int setup_buffer_list(struct hwacc_drvdata *drvdata)
 
                 buffer_pool[i].chan_buf_list = \
                         devm_kzalloc(&drvdata->pdev->dev,
-                        sizeof (*buffer_pool[i].chan_buf_list),
+                        sizeof (struct chan_buf) * drvdata->nr_channels,
                         GFP_KERNEL);
 
                 DEBUG("enqueing buffer set %d\n", i);

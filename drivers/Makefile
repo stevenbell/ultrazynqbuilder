@@ -1,5 +1,7 @@
 KER_DIR := /lib/modules/`uname -r`/build
+
 PWD := `pwd`
+
 # There are three modules created from this source code
 #   cmabuffer - Provides access to large contiguous memory buffers from Linux CMA
 #   hwacc - Driver for hardware accelerator, using one or more DMA engines
@@ -16,14 +18,13 @@ all:
 	$(MAKE) -C $(KER_DIR) M=$(PWD) modules
 
 install:
-	$(MAKE) -C $(KER_DIR) M=$(PWD) modules
-	sudo insmod cmabuffer
-	sudo insmod hwacc
+	$(MAKE) -C $(KER_DIR) M=$(PWD) modules_install
+	sudo modprobe hwacc
+	sudo modprobe cmabuffer
 
 clean:
 	make -C $(KER_DIR) M=$(PWD) clean
 
 uninstall:
-	make -C $(KER_DIR) M=$(PWD) clean
 	sudo rmmod hwacc
 	sudo rmmod cmabuffer
