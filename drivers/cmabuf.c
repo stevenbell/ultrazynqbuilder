@@ -19,7 +19,7 @@ struct cdev *chardev;
 struct device *cmabuf_dev;
 struct class *cmabuf_class;
 
-const int debug_level = 4; // 0 is errors only, increasing numbers print more stuff
+const int debug_level = 1; // 0 is errors only, increasing numbers print more stuff
 
 // TODO: allow the file handle to be opened multiple times, and access
 // the same pool of memory?
