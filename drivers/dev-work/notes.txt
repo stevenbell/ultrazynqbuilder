@@ -1,0 +1,100 @@
+Interrupt Handler:
+-------------------
+The interrupt request can be threaded: call to request_threaded_irq
+	- first, the IRQ handler gets called: 
+		- acknowledge interrupt
+		- halt DMA engine
+	- then the threaded handler runs:
+		- moves the buffer at front of queue to "completed_queue" with proper synchronization
+		- call schedule_dma()
+
+Schedule_dma()
+----------------
+- if DMA is running, do nothing
+- else if DMA is halted and "processing_queue" is not empty:
+	set DMA up with head-of-the-line buffer from processing_queue
+
+enroll_buffer(id)
+---------------
+This is called when the user does an ioctl call to enroll a buffer.
+- add buffer to "processing_queue"
+- call schedule_dma()
+
+process_buffer(id)
+------------------
+This is called when the user wants to access the filled buffer.
+- sleep until buffer is filled and moved to "completed_queue"
+- remove buffer from complete queue
+- return sucess
+
+
+
+
+Driver organization:
+----------------------
+
+device_probe():
+----------------
+- request IRQ and set IRQ handler
+- get register map
+- register device driver
+
+device_remove():
+----------------
+- release IRQ
+- unmap register address space
+- un-register device driver
+
+device_open():
+---------------
+- reset DMA
+- initialize DMA
+- set max numOpens
+- initialize the two queues: processing_queue and completed_queue
+- allocate space for one SG descriptor
+
+device_close():
+--------------
+- stop DMA
+- reset nOpens
+- de-initialize the two queues: processing_queue and completed_queue
+- de-allocate the space reserved for SG descriptor
+
+device_ioctl():
+---------------
+- handle user requests
+
+
+
+
+
+DMA helper functions
+--------------------
+
+dma_help_init(void *reg_space):
+-------------------------------
+initializes the DMA
+- resets and enable DMA
+- set correct cache coherence mode
+- set IRQthreshold
+- enable interrupts
+- reset pending flags
+
+dma_help_run_once(void *reg_space, void *sg_table, KBuffer *buf):
+------------------------------------------------------------------
+sets up DMA for a single 2D transfer
+- initializes the SG descriptor
+- sets DMA's current descriptor pointer
+- sets DMA's last descriptor pointer to kickstart DMA engine
+
+dma_help_stop(coid *reg_space):
+--------------------------------
+stops the DMA engine
+
+dma_help_ack_all(void *reg_space):
+----------------------------------------
+acknowledges pending interrupts
+
+dma_help_is_halted(void *reg_space):
+------------------------------------
+checks whether the DMA is halted or not 
