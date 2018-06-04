@@ -87,8 +87,8 @@ void imx219_cam_run(IMX219_Config* config)
 {
   u32* csirx = (u32*)config->baseaddr;
 
-  csirx[0] = CSIRX_CTRL_RUN_CONTINUOUS | CSIRX_CTRL_ENABLE_INTERRUPTS | CSIRX_CTRL_ENABLE_SOF_IRQ;
-  csirx[1] = 0xf; // Start running
+  csirx[0] |= CSIRX_CFG_RUN_CONTINUOUS | CSIRX_CFG_ENABLE_INTERRUPTS | CSIRX_CFG_ENABLE_SOF_IRQ;
+  csirx[1] = CSIRX_CTRL_RUN | CSIRX_CTRL_ACK_ALL_IRQ; // Start running
 }
 
 void imx219_cam_set_exposure(IMX219_Config* config, u16 lines){
@@ -100,4 +100,10 @@ void imx219_cam_set_exposure(IMX219_Config* config, u16 lines){
 
   i2c_set_mux(config->i2c_channel);
   XIic_Send(IIC_BASEADDR, I2C_CAM_ADDR, regvals, 4, XIIC_STOP);
+}
+
+Time imx219_min_frame_time(IMX219_Config* config)
+{
+  Time t = 33327;
+  return t;
 }

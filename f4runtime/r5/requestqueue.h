@@ -15,26 +15,38 @@
 
 #define QUEUE_LEN 10
 
-// WARNING: the size of an enum is not defined by the C standard, and may
+// WARNING: the byte size of an enum is not defined by the C standard, and may
 // differ across platforms.
 typedef enum {
   CAMERA0,
   CAMERA1,
-  NONE
-} RequestType;
+  NO_DEVICE
+} ReqDevice;
 
 typedef struct {
   u32 exposure;
 } CameraParams;
 
 typedef struct {
-  RequestType type;
+  ReqDevice device;
   Time time;
   CameraParams params;
 } Request;
 
-void requestqueue_init(void);
-void requestqueue_close(void);
-void requestqueue_check(void);
+// Linked list node used to create a time-ordered queue of requests
+typedef struct rq RequestQ;
+struct rq {
+  Request req;
+  RequestQ* next;
+};
+
+// Methods to handle the shared memory connection to the master processor
+void masterqueue_init(void);
+void masterqueue_close(void);
+void masterqueue_check(void);
+
+void requestqueue_push(ReqDevice dev, Request req);
+Request requestqueue_peek(ReqDevice dev);
+Request requestqueue_pop(ReqDevice dev);
 
 #endif /* REQUESTQUEUE_H */

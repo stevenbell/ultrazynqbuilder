@@ -6,6 +6,7 @@
  */
 
 #include <stdio.h>
+#include <stdbool.h>
 #include "platform.h"
 #include "xil_printf.h"
 #include "sleep.h"
@@ -23,10 +24,10 @@ int main()
 {
   u32* leds = (u32*)GPIO_LEDS;
   u32* gpio_cam = (u32*)GPIO_CAMERA;
-  ttc_clk_init();
+  ttc_clock_init();
 
 #ifdef USING_AMP
-  requestqueue_init();
+  masterqueue_init();
 #endif
   init_platform(); // Interrupts and such
 
@@ -37,7 +38,6 @@ int main()
     *leds = 0x55;
     usleep(100000);
   }
-
 
   // Enable the cameras
   *leds = 0x01;
@@ -58,80 +58,124 @@ int main()
   };
   imx219_cam_init(&cam1);
 
+  // HACK: disable output
+  *(u32*)(cam0.baseaddr) |= CSIRX_CFG_OUTPUT_DISABLE;
+  // HACK: set the line height
+  *(u32*)(cam0.baseaddr + 0x10) = 1232; // Coming off the image sensor
+
   // Start the csi receivers running
   imx219_cam_run(&cam0);
   imx219_cam_run(&cam1);
 
-  // Main loop
-  // Pick a target time (the start time of the next event from the queue)
-  u32 target = ttc_clock_now() + 120*(1000*100); // 100MHz = 10ns increments
-  int32_t inflight_time = 33327; // N-to-N+1 time of the frame currently in flight (us)
+  // HACK: Start the HLS demosaicker
+  uint32_t* demosaic = (uint32_t*)XPAR_DEMOSAIC0_S_AXI_CONFIG_BASEADDR;
+  *demosaic = 0x81; // Start, auto-restart
 
-  u32 last_cam_time[2] = {0, 0};
+  // Main loop
+  Time last_cam_time[2] = {0, 0}; // Last time when we received a frame
+
+  // Arrays to track images in flight
+  Time cam0_inflight_sof[2] = {0, 0}; // When we expect to receive the frames in flight
+  Time cam0_inflight_duration[2] = {0, 0}; // Expected duration (sof to sof) of frames in flight
+  bool cam0_inflight_isdummy[2] = {true, true};
 
   while(1){
-    requestqueue_check();
+    masterqueue_check();
 
     if(last_cam_time[0] != cam0.finished_time){
       // cam0 has a new frame, handle it
       last_cam_time[0] = cam0.finished_time;
 
-    uint32_t now = cam0.finished_time;
-    int32_t delta_us = (int32_t)(target/100) - (now / 100); // Time from now, microseconds
-
-    if(delta_us < 15*1000){
-      // Less than 15ms left; this round is over
-      printf("%d\r\n", delta_us);
-
-      // Pick a new target time between 100 and 200ms from now
-      target = ttc_clock_now() + ((rand() % 200) + 100) *(1000*100); // 100MHz = 10ns increments
-      delta_us = (int32_t)(target/100) - (now / 100);
-    }
-
-    // TODO: Wait for some configurable delay, up to the commit-point
-
-    uint32_t exposure_lines; // Duration of the exposure in terms of image line times
-
-    if(delta_us - inflight_time < 15*1000){
-      // This round will be over after the next frame, so configure a
-      // short shot for the beginning of the next round
-      exposure_lines = 10; // Anything less than ~2000 will be 33ms
-      inflight_time = 33327;
-    }
-    else{
-      // This round isn't going to be over any time soon; configure the
-      // exposure to hit the target time
-      int32_t exposure = delta_us - inflight_time; // How much after frame N+1
-      exposure_lines = (exposure - 80) / 18.90;
-      inflight_time = exposure;
-
-      // Probably better to just throw away lots of frames rather than one big one...
-      if(exposure_lines > 65535){
-        exposure_lines = 65535;
-        inflight_time = exposure_lines * 19; // TODO: replace with calculated max
+      if(!cam0_inflight_isdummy[0]){
+        printf("received frame on camera0 at %llu (scheduled at %llu,  %+lld)\n",
+             last_cam_time[0], cam0_inflight_sof[0], ttc_clock_diff(last_cam_time[0], cam0_inflight_sof[0]));
       }
-      else if(exposure_lines < 4){
-        exposure_lines = 4;
-        inflight_time = 33327;
+      else{
+        printf("rx dummy at %llu (expected at %llu,  %+lld)\n",
+             last_cam_time[0], cam0_inflight_sof[0], ttc_clock_diff(last_cam_time[0], cam0_inflight_sof[0]));
       }
-    }
 
-    imx219_cam_set_exposure(&cam0, exposure_lines);
-    printf("target: %u  time remaining: %d (%d), exposure %d\r\n", target, delta_us, delta_us - inflight_time, exposure_lines);
-    // Grab the next frame from the CSI (frame N+1)
-    // Frame N+1 had its settings locked in a while ago, and is exposing
-    imx219_cam_run(&cam0);
-    }
+      // We just began to receive frame N; frame N+1 is already locked in (and
+      // possibly exposing), so we'll be setting frame N+2.
 
-    if(last_cam_time[1] != cam1.finished_time){
-      // cam1 has a new frame, handle it
-      imx219_cam_run(&cam1);
-      last_cam_time[1] = cam1.finished_time;
-    }
+      // Default values; we'll override them if we actually need a frame
+      u32 exposure_lines = 4; // Length of the next exposure, in terms of image rows
+      bool isDummy = true; // Whether this is a dummy (hidden) frame
+
+      // Look at the next request
+      Request req = requestqueue_peek(CAMERA0);
+      if(req.device != NO_DEVICE){
+
+        // Time in the request is the beginning of the exposure; calculate the
+        // SOF time, which is what we can actually track.
+        Time sof_target = req.time + req.params.exposure + IMX219_BLANKING;
+
+        // Time from SOF of previous frame to SOF of this request
+        Time interframe = req.params.exposure + IMX219_BLANKING;
+        if(interframe < imx219_min_frame_time(&cam0)){
+          interframe = imx219_min_frame_time(&cam0);
+        }
+
+        // Calculate the slack
+        s64 slack = ttc_clock_diff((cam0_inflight_sof[1] + interframe), sof_target);
+
+        // If the request is too late (slack < 0), just run it right away
+        // If we've hit the time when the request should be scheduled, or if the
+        // request does not have enough slack to be scheduled properly, just
+        // schedule it right away. We might hit the timepoint more accurately if
+        // we put in another dummy frame, but it is safer to schedule ASAP and
+        // not push the schedule later, possibly bumping other things.
+        if(slack < (s64)imx219_min_frame_time(&cam0)){
+          exposure_lines = req.params.exposure / 18.90;
+          if(exposure_lines < 1){
+            exposure_lines = 1;
+          }
+          isDummy = false;
+          requestqueue_pop(CAMERA0); // We're done with this Request
+        }
+
+        // If we can insert more than one dummy frame (slack > 2*min_frame_time),
+        // then insert a minimal dummy frame.
+        // Otherwise, calculate the required dummy frame exposure and insert it.
+        else if(slack < 2*imx219_min_frame_time(&cam0)){
+          exposure_lines = (slack - IMX219_BLANKING) / 18.90;
+        }
+        printf("sof target: %lld, slack: %lld  lines: %lu  dummy: %u\n", sof_target, slack, exposure_lines, isDummy);
+      } // END if(camera has a request)
+
+      // Configure the camera and CSI receiver with the calculated parameters
+      imx219_cam_set_exposure(&cam0, exposure_lines);
+
+      // Store the important values into the in-flight queue
+      cam0_inflight_sof[0] = cam0_inflight_sof[1];
+      cam0_inflight_duration[0] = cam0_inflight_duration[1];
+      cam0_inflight_isdummy[0] = cam0_inflight_isdummy[1];
+
+      if(exposure_lines > 1763){ // TODO: don't hardcode this
+        cam0_inflight_duration[1] = (exposure_lines * 18.90) + 90;
+      }
+      else{
+        cam0_inflight_duration[1] = imx219_min_frame_time(&cam0);
+      }
+      cam0_inflight_sof[1] = last_cam_time[0] + cam0_inflight_duration[0] + cam0_inflight_duration[1];
+      cam0_inflight_isdummy[1] = isDummy;
+
+      // CSI receiver has be configured for frame N+1, not N+2
+      if(cam0_inflight_isdummy[0]){
+        *(u32*)(cam0.baseaddr) |= CSIRX_CFG_OUTPUT_DISABLE;
+      }
+      else{
+        *(u32*)(cam0.baseaddr) &= ~(CSIRX_CFG_OUTPUT_DISABLE); // Enable output (clear "disable" bit)
+      }
+
+      // Grab the next frame from the CSI (frame N+1)
+      // Frame N+1 had its settings locked in a while ago, and is exposing
+      imx219_cam_run(&cam0);
+    } // END handling camera 0
   }
 
 #ifdef USING_AMP
-  requestqueue_close();
+  masterqueue_close();
 #endif
   cleanup_platform();
 

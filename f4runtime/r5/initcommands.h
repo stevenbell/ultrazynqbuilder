@@ -66,5 +66,5 @@ uint8_t byte_strings[][5] = {
 {4,0x01,0x5A,0x04,0x21}, // COARSE_INTEGRATION_TIME: 0x421 = 1057
 {3,0x01,0x57,0x00,0},    // ANA_GAIN_GLOBAL_A: 0
 
-{0, 0, 0, 0} // End of command stream
+{0, 0, 0, 0, 0} // End of command stream
 };
