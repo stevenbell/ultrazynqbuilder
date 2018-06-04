@@ -633,8 +633,8 @@ CONFIG.c_sg_include_stscntrl_strm {0} \
   <% stream['dwc'] = module['name'] + '_dwidth_' + stream['name'] %>
   set ${stream['dwc']} [ create_bd_cell -type ip -vlnv xilinx.com:ip:axis_dwidth_converter:1.1 ${stream['dwc']} ]
   set_property -dict [ list \
-      CONFIG.M_TDATA_NUM_BYTES {2} \
-      CONFIG.S_TDATA_NUM_BYTES {${stream['depth']}} \
+      CONFIG.S_TDATA_NUM_BYTES {2} \
+      CONFIG.M_TDATA_NUM_BYTES {${stream['depth']}} \
     ] $${stream['dwc']}
 
   connect_bd_intf_net -intf_net ${module['name']}_M_AXIS [get_bd_intf_pins ${module['name']}/${stream['name']}] [get_bd_intf_pins ${stream['dwc']}/S_AXIS]
