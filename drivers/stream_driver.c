@@ -17,7 +17,7 @@
 #include <linux/mm.h>
 #include <asm/io.h>
 
-#include "ioctl_stream.h"
+#include "ioctl_cmds.h"
 #include "common.h"
 
 #define CLASS_NAME "streamgen"
@@ -146,21 +146,21 @@ static long dev_ioctl(struct file *filep, unsigned int cmd, unsigned long arg)
 
 		case RD_CONFIG:
 			DEBUG("[streamgen]: ioctl [RD_CONFIG]\n");
-			reg_val = ioread32((const volatile void *)(dev_base_addr + 0));
+			reg_val = ioread32((void *)(dev_base_addr + 0));
 			if(access_ok(VERIFY_WRITE, (void *)arg, sizeof(unsigned int))) {
 				copy_to_user((void *)arg, &reg_val, sizeof(unsigned int));				
 			} else { return(-EIO); }
 		break;
 		case RD_SIZE:
 			DEBUG("[streamgen]: ioctl [RD_SIZE]\n");
-			reg_val = ioread32((const volatile void *)(dev_base_addr + 12));
+			reg_val = ioread32((void *)(dev_base_addr + 12));
 			if(access_ok(VERIFY_WRITE, (void *)arg, sizeof(unsigned int))) {
 				copy_to_user((void *)arg, &reg_val, sizeof(unsigned int));				
 			} else { return(-EIO); }
 		break;
 		case RD_STATUS:
 			DEBUG("[streamgen]: ioctl [RD_STATUS]\n");
-			reg_val = ioread32((const volatile void *)(dev_base_addr + 16));
+			reg_val = ioread32((void *)(dev_base_addr + 16));
 			if(access_ok(VERIFY_WRITE, (void *)arg, sizeof(unsigned int))) {
 				copy_to_user((void *)arg, &reg_val, sizeof(unsigned int));				
 			} else { return(-EIO); }

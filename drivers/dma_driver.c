@@ -23,7 +23,7 @@
 #include <linux/platform_device.h>
 
 #include "kbuffer.h"
-#include "ioctl_dma.h"
+#include "ioctl_cmds.h"
 #include "common.h"
 #include "dma.h"
 #include "dma_help.h"

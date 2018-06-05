@@ -12,14 +12,14 @@
 #include "ubuffer.h"
 
 /* kernel buffer declaration */
-struct KBuffer {
+typedef struct KBuffer {
 	struct UBuffer xdomain; // cross-domain part of the buffer (user buffer part)
 	u64 size; // actual size of memory chunk allocated
 	u64 phys_addr; // physical address of memory chunk allocated
 	void *kern_addr; // kernel virtual address of memory chunk allocated
 	struct mMap *cvals;
 	u32 mmap_offset;
-};
+} KBuffer;
 
 /* kernel buffer allocation mode */
 enum KBufferMode {

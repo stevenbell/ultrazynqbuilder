@@ -18,7 +18,7 @@
 
 #include "kbuffer.h"
 #include "common.h"
-#include "ioctl_cma.h"
+#include "ioctl_cmds.h"
 
 #define CLASS_NAME "cmabuffer"
 #define DEVICE_NAME "cmabuffer0"
@@ -244,7 +244,7 @@ static int dev_mmap(struct file *filep, struct vm_area_struct *vma)
 	DEBUG("[cmabuf]: pre-allocated buffer size = %llu\n", kbuf->size);
 	DEBUG("[cmabuf]: req_size + (offset << PAGE_SHIFT) = %llu\n", (req_size + (offset << PAGE_SHIFT)));
 	DEBUG("[cmabuf]: offset = %llu pages\n", offset);
-	DEBUG("[cmabuf]: vma->vm_pgoff = 0x%08X\n", vma->vm_pgoff);
+	DEBUG("[cmabuf]: vma->vm_pgoff = 0x%08lx\n", vma->vm_pgoff);
 	if(kbuf->size < req_size) {
 		WARNING("[cmabuf]: dev_mmap : mapping cannot overflow buffer boundaries\n");
 		return(-EINVAL);
