@@ -40,6 +40,8 @@ static LIST_HEAD(KBufferRecords);
 static u64 page_aligned_size(u64 size);
 static struct KBufferRecord *get_buffer_rec(u64 id);
 
+// device handle
+static struct device *cma_dev = NULL;
 
 /* === public interface === */
 
@@ -142,7 +144,7 @@ int init_buffers(struct device *dev, enum KBufferMode alloc_mode, u64 static_blo
 		WARNING("buffer initialization failed\n");
 		return -ENOMEM;
 	}
-
+	cma_dev = dev;
 	initialized = 1;
 	DEBUG("buffer initialization successfully completed\n");
 	return 0;
@@ -183,7 +185,7 @@ void cleanup_buffers(struct device *dev)
 	DEBUG("buffer cleanup complete\n");
 }
 
-struct KBuffer *acquire_buffer(struct device *dev, u32 width, u32 height, u32 depth, u32 stride)
+struct KBuffer *acquire_buffer(u32 width, u32 height, u32 depth, u32 stride)
 {
 	u32 found = 0;
 	struct KBufferRecord *record;
@@ -233,7 +235,7 @@ struct KBuffer *acquire_buffer(struct device *dev, u32 width, u32 height, u32 de
 
 	// allocate memory chunk
 	DEBUG("allocating memory chunk of side %llu bytes in DYNAMIC mode\n", block_size);
-	kern_addr = dma_alloc_coherent(dev, (size_t) block_size, (dma_addr_t *) &phys_addr, GFP_KERNEL);
+	kern_addr = dma_alloc_coherent(cma_dev, (size_t) block_size, (dma_addr_t *) &phys_addr, GFP_KERNEL);
 	if(kern_addr == NULL) {
 		WARNING("failed to acquire buffer in DYNAMIC mode\n");
 		return NULL;
@@ -245,7 +247,7 @@ struct KBuffer *acquire_buffer(struct device *dev, u32 width, u32 height, u32 de
 	if(record == NULL) {
 		DEBUG("failed to acquire space for KBufferRecord in DYNAMIC mode\n");
 		DEBUG("failed to acquire buffer of size %llu in DYNAMIC mode\n", block_size);
-		dma_free_coherent(dev, (size_t) block_size, kern_addr, phys_addr);
+		dma_free_coherent(cma_dev, (size_t) block_size, kern_addr, phys_addr);
 		return NULL;
 	}
 
@@ -271,7 +273,7 @@ struct KBuffer *acquire_buffer(struct device *dev, u32 width, u32 height, u32 de
 	return &record->kbuf;
 }
 
-void release_buffer(struct device *dev, u32 id)
+void release_buffer(u32 id)
 {
 	struct KBufferRecord *target;
 	target = get_buffer_rec(id);
@@ -290,7 +292,7 @@ void release_buffer(struct device *dev, u32 id)
 		list_del(&target->list);
 
 		// free memory chunk
-		dma_free_coherent(dev, (size_t) target->kbuf.size,
+		dma_free_coherent(cma_dev, (size_t) target->kbuf.size,
 			target->kbuf.kern_addr, target->kbuf.phys_addr);
 
 		// free KBufferRecord
@@ -349,8 +351,9 @@ int is_empty_list(void) {
 }
 
 
-EXPORT_SYMBOL(init_buffers);
+//EXPORT_SYMBOL(init_buffers);
 EXPORT_SYMBOL(acquire_buffer);
 EXPORT_SYMBOL(release_buffer);
-EXPORT_SYMBOL(cleanup_buffers);
-EXPORT_SYMBOL(is_empty_list);
+EXPORT_SYMBOL(get_buffer_by_id);
+//EXPORT_SYMBOL(cleanup_buffers);
+//EXPORT_SYMBOL(is_empty_list);

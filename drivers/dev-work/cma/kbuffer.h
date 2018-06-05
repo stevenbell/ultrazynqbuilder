@@ -47,21 +47,19 @@ int init_buffers(struct device *dev, enum KBufferMode alloc_mode, u64 static_blo
 void cleanup_buffers(struct device *dev);
 
 /* gets a buffer of the requested size
- * @param dev The device managed by the driver
  * @param width The width of the image frame
  * @param height The height of the image frame
  * @param depth The byte-depth of the image frame
  * @param stride The stride between successive rows of the image frame
  * @return The buffer of requested size, or NULL for failure
  */
-struct KBuffer *acquire_buffer(struct device *dev, u32 width, u32 height, u32 depth, u32 stride);
+struct KBuffer *acquire_buffer(u32 width, u32 height, u32 depth, u32 stride);
 
 /* releases the buffer for reallocation
- * @param dev The device managed by the driver
  * @param id The id of the buffer to release
  * @return N/A
  */
-void release_buffer(struct device *dev, u32 id);
+void release_buffer(u32 id);
 
 /* gets a buffer from the list of allocated buffer using the id field
  * @param id The id of the buffer to retrieve
