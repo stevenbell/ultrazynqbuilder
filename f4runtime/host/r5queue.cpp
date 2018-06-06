@@ -96,6 +96,16 @@ int main(int argc, char* argv[])
 
     metal_io_block_write(io, 0x08 + master*(sizeof(Request)), &req, sizeof(Request));
 
+    // HACK: make the same request on the other camera
+    master = (master + 1) % QUEUE_LEN;
+    if(master == slave){
+      printf("Message queue is full!\n");
+      break; // Just die, for now
+    }
+    req.device = CAMERA1;
+    metal_io_block_write(io, 0x08 + master*(sizeof(Request)), &req, sizeof(Request));
+    // END HACK
+
     metal_io_write32(io, 0, master); // Update the master count
   }
 

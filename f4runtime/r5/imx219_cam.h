@@ -4,7 +4,9 @@
 #ifndef IMX219_H
 #define IMX219_H
 
+#include "requestqueue.h"
 #include "xil_types.h"
+#include <stdbool.h>
 
 #define I2C_CAM_ADDR 0x10
 #define I2C_FOCUS_ADDR 0x0c
@@ -35,10 +37,16 @@
 #define CSIRX_CTRL_ACK_EOF_IRQ 0x08
 
 typedef struct {
-  unsigned int i2c_channel; // I2C mux channel, 0-3)
+  ReqDevice reqId;
+  unsigned int i2c_channel; // I2C mux channel, (0-3)
   u32 baseaddr; // CSI receiver base address
   unsigned int irq; // CSI receiver IRQ
   Time finished_time; // Time of last interrupt
+
+  // Arrays to track images in flight
+  Time inflight_sof[2]; // When we expect to receive the frames in flight
+  Time inflight_duration[2]; // Expected duration (sof to sof) of frames in flight
+  bool inflight_isdummy[2];
 } IMX219_Config;
 
 // Blanking time in microseconds
@@ -50,5 +58,6 @@ void imx219_cam_init(IMX219_Config* config);
 void imx219_cam_run(IMX219_Config* config);
 void imx219_cam_set_exposure(IMX219_Config* config, u16 lines);
 Time imx219_min_frame_time(IMX219_Config* config);
+void imx219_handle_requests(IMX219_Config* config);
 
 #endif
