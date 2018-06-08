@@ -36,6 +36,22 @@ struct dma_queue_item_t *dma_queue_dequeue(struct dma_queue_t *queue)
 	return item;
 }
 
+struct dma_queue_item_t *dma_queue_peek(struct dma_queue_t *queue)
+{
+	struct dma_queue_item_t *item = NULL;
+	struct dma_queue_item_t *it;
+
+	while(down_interruptible(&queue->mutex) != 0);
+	list_for_each_entry(it, &queue->list, list) {
+		item = it;
+		break;
+	}
+
+	up(&queue->mutex);
+
+	return item;
+}
+
 /* get a queue item with given id */
 struct dma_queue_item_t *dma_queue_get(u32 id, struct dma_queue_t *queue)
 {

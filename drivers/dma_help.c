@@ -54,21 +54,22 @@ void dma_help_run_once(void *reg_space, void *sg_table, struct KBuffer *buf)
 	sg_addr = (u32 *) sg_table;
 
 	// setup SG descriptor
-	sg_addr[0] = (u32) virt_to_phys(sg_table);
-	sg_addr[1] = 0;
-	sg_addr[2] = buf->phys_addr & 0xFFFFFFFF;
-	sg_addr[3] = 0;
+	sg_addr[0] = (u32) virt_to_phys(sg_table) + 0x40; // Next descriptor
+	sg_addr[1] = 0; // Upper 32 bits, not used
+	sg_addr[2] = buf->phys_addr & 0xFFFFFFFF; // Data base address
+	sg_addr[3] = 0; // Upper 32 bits, not used
 	sg_addr[4] = 3 << AWCACHE_OFFSET;
 	sg_addr[5] = (buf->xdomain.height << VSIZE_OFFSET) | (buf->xdomain.stride * buf->xdomain.depth);
 	sg_addr[6] = buf->xdomain.width * buf->xdomain.depth;
 	sg_addr[7] = 0;
 
+	// Starting descriptor
 	iowrite32(virt_to_phys(sg_table), MAKE_WR_IOPTR(dma_addr + S2MM_CURDESC_LSB));
 
 	// set IRQThreshold, enable IOC interrupt, and run
 	iowrite32((1 << 16) | (1 << 12) | 1, MAKE_WR_IOPTR(dma_addr + S2MM_ACR));
 
-	// kickstart DMA
+	// Tail descriptor, kicks off transaction
 	iowrite32(virt_to_phys(sg_table), MAKE_WR_IOPTR(dma_addr + S2MM_TAILDESC_LSB));
 } 
 
@@ -91,5 +92,5 @@ int dma_help_is_idle(void *reg_space)
 	char *dma_addr;
 	dma_addr = (char *) reg_space;
 	
-	return ioread32(MAKE_RD_IOPTR(dma_addr + S2MM_ASR)) & (1 << 1);
+	return ioread32(MAKE_RD_IOPTR(dma_addr + S2MM_ASR)) & 0x3; // Either IDLE or HALTED bits are 1 means stopped
 }
