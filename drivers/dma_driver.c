@@ -66,9 +66,12 @@ static void schedule_dma(void)
 	struct dma_queue_item_t *hol;
 	struct KBuffer *kbuf;
 
-	if(!dma_help_is_idle((void *) dev_base_addr)) return;
+	if(!dma_help_is_idle((void *) dev_base_addr)){
+		DEBUG("DMA is not idle; skipping scheduling for now");
+		return;
+	}
 	
-	hol = dma_queue_dequeue(&processing_queue);
+	hol = dma_queue_peek(&processing_queue);
 	if(hol == NULL) return;
 
 	kbuf = get_buffer_by_id(hol->id);
@@ -142,6 +145,7 @@ static long dev_ioctl(struct file *filep, unsigned int cmd, unsigned long user_a
 			DEBUG("[dma-mod] ioctl [WAIT_COMPLETE]\n");
 			if(access_ok(VERIFY_READ, (void *)user_arg, sizeof(struct UBuffer))) {
 				copy_from_user(&ubuf, (void *)user_arg, sizeof(struct UBuffer));				
+
 				if((qitem = dma_queue_get(ubuf.id, &completed_queue)) != NULL) {
 					// remove and free item from completed queue
 					dma_queue_delete(qitem->id, &completed_queue);
@@ -155,8 +159,12 @@ static long dev_ioctl(struct file *filep, unsigned int cmd, unsigned long user_a
 					kfree(qitem);
 					status = 0;
 				}
-				else { status = -EINVAL; }
+				else {
+					DEBUG("[dma-mod]: Buffer neither completed nor processing!");
+					status = -EINVAL;
+				}
 			} else {
+				DEBUG("[dma-mod]: Failed to access user pointer");
 				status = -EIO;
 			}
 			break;

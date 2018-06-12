@@ -24,6 +24,9 @@ void dma_queue_enqueue(struct dma_queue_item_t *item, struct dma_queue_t *queue)
 /* dequeue the first element in the queue */
 struct dma_queue_item_t *dma_queue_dequeue(struct dma_queue_t *queue);
 
+/* return the first element in the queue without removing it*/
+struct dma_queue_item_t *dma_queue_peek(struct dma_queue_t *queue);
+
 /* get a queue item with given id */
 struct dma_queue_item_t *dma_queue_get(u32 id, struct dma_queue_t *queue);
 
