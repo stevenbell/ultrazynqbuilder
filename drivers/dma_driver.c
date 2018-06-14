@@ -2,7 +2,7 @@
  * @file driver.c
  * @authors:	Gedeon Nyengele <nyengele@stanford.edu>
  * 				
- * version 2.0
+ * version 3.0
  * @brief DMA S2MM Driver 
  */
 
@@ -21,6 +21,7 @@
 #include <asm/page.h>
 #include <linux/slab.h>
 #include <linux/platform_device.h>
+#include <linux/cdev.h>
 
 #include "kbuffer.h"
 #include "ioctl_cmds.h"
@@ -29,81 +30,104 @@
 #include "dma_help.h"
 #include "dma_queue.h"
 
-#define CLASS_NAME "xilcam"
-#define DEVICE_NAME "xilcam0"
-
 MODULE_LICENSE("GPL");
 MODULE_AUTHOR("Gedeon Nyengele");
 MODULE_DESCRIPTION("DMA S2MM Driver");
-MODULE_VERSION("2.0");
+MODULE_VERSION("3.0");
 
+/* debug level */
 const int debug_level = 4;
 
-static int majorNumber;
+/* local driver data */
+struct my_drvdata {
+	int nOpens;
+	dev_t dev_num;
+	void __iomem *dev_base_addr;
+	void *sg_base_addr;
+	struct resource *irq_res;
+	struct resource *reg_res;
+	struct platform_device *pdev;
+	struct device *dev;
+	struct cdev cdev;
+	wait_queue_head_t wq_frame;
+	struct dma_queue_t processing_queue;
+	struct dma_queue_t completed_queue;
+};
+
+/* global driver data */
+#define CLASSNAME	"xilcam"
+#define MAX_DEVS	32
 static struct class *drvClass = NULL;
-static struct device *drvDevice = NULL;
+static atomic_t ndevs;
+static dev_t global_dev_num;
 
-static unsigned nOpens = 0;
-
-// driver internal state variables
-struct resource* irq_res = NULL; // interrupt
-struct resource* reg_res = NULL; // register space
-static char *dev_base_addr = NULL; // base address for register space
-static char *sg_base_addr = NULL; // base address for SG descritor table
-
-// wait queue
-DECLARE_WAIT_QUEUE_HEAD(wq_frame);
-
-// the queues
-static struct dma_queue_t processing_queue;
-static struct dma_queue_t completed_queue;
-
-// CMA driver utils
+/* CMA driver utils */
 extern struct KBuffer *get_buffer_by_id(u32 id);
 
-static void schedule_dma(void)
+static void schedule_dma(struct my_drvdata *drvdata)
 {
 	struct dma_queue_item_t *hol;
 	struct KBuffer *kbuf;
 
-	if(!dma_help_is_idle((void *) dev_base_addr)){
+	if(!dma_help_is_idle(drvdata->dev_base_addr)){
 		DEBUG("DMA is not idle; skipping scheduling for now");
 		return;
 	}
 	
-	hol = dma_queue_peek(&processing_queue);
+	hol = dma_queue_peek(&drvdata->processing_queue);
 	if(hol == NULL) return;
 
 	kbuf = get_buffer_by_id(hol->id);
 	if(kbuf == NULL) return;
 
-	dma_help_run_once((void *) dev_base_addr, (void *) sg_base_addr, kbuf);
+	dma_help_run_once(drvdata->dev_base_addr, drvdata->sg_base_addr, kbuf);
 }
 
 static int dev_open(struct inode *inodep, struct file *filep)
 {
+	struct my_drvdata *drvdata;
+
+	DEBUG("dev_open entry\n");
+	
+	drvdata = container_of(inodep->i_cdev, struct my_drvdata, cdev);
+	
 	// no support for multiple opens
-	if(nOpens++) return -EBUSY;
+	if(drvdata->nOpens++) return -EBUSY;
 
 	// initialize DMA
-	if(dma_help_init((void *) dev_base_addr) != 0) return -EINVAL;
+	if(dma_help_init(drvdata->dev_base_addr)) return -EINVAL;
 
 	// initialze the queues
-	dma_queue_init(&processing_queue);
-	dma_queue_init(&completed_queue);
+	dma_queue_init(&drvdata->processing_queue);
+	dma_queue_init(&drvdata->completed_queue);
+
+	// initialize waitqueue
+	init_waitqueue_head(&drvdata->wq_frame);
 
 	// allocate space for SG descriptor
-	sg_base_addr = kmalloc(DESC_SIZE, GFP_KERNEL);
-	if(sg_base_addr == NULL) return -ENOMEM;
+	drvdata->sg_base_addr = devm_kzalloc(drvdata->dev, DESC_SIZE, GFP_KERNEL);
+	if(drvdata->sg_base_addr == NULL) return -ENOMEM;
+	
+	// copy drvdata to filep
+	filep->private_data = drvdata;
 
+	DEBUG("dev_open exit\n");
 	return 0;
 }
 
 static int dev_close(struct inode *inodep, struct file *filep)
 {
-	dma_help_stop((void *) dev_base_addr);
-	nOpens = 0;
-	if(sg_base_addr) kfree(sg_base_addr);
+	struct my_drvdata *drvdata;
+
+	DEBUG("dev_close entry\n");
+
+	drvdata = container_of(inodep->i_cdev, struct my_drvdata, cdev);
+	dma_help_stop(drvdata->dev_base_addr);
+	drvdata->nOpens = 0;
+	if(drvdata->sg_base_addr) devm_kfree(drvdata->dev, drvdata->sg_base_addr);
+	filep->private_data = NULL;
+
+	DEBUG("dev_close exit\n");
 	return 0;
 }
 
@@ -113,14 +137,21 @@ static long dev_ioctl(struct file *filep, unsigned int cmd, unsigned long user_a
 	struct KBuffer *kbuf_ptr;
 	struct dma_queue_item_t *qitem;
 	long status = 0;
+	struct my_drvdata *drvdata;
 
 	DEBUG("[dma-mod] dev_ioctl entry\n");
+
+	drvdata = filep->private_data;
+	if(!drvdata) {
+		DEBUG("[dma-mod] ioctl: could not get driver data\n");
+		return -ENOMEM;
+	}
 
 	switch(cmd) {
 		case ENROLL_BUFFER:
 			DEBUG("[dma-mod] ioctl [ENROLL_BUFFER]\n");
 			if(access_ok(VERIFY_READ, (void *)user_arg, sizeof(struct UBuffer))) {
-				copy_from_user(&ubuf, (void *)user_arg, sizeof(struct UBuffer));
+				status = copy_from_user(&ubuf, (void *)user_arg, sizeof(struct UBuffer));
 				kbuf_ptr = get_buffer_by_id(ubuf.id);
 				if(kbuf_ptr == NULL) {
 					ERROR("[dma-mod] could not find kernel buffer with ID = %u\n", ubuf.id);
@@ -132,8 +163,8 @@ static long dev_ioctl(struct file *filep, unsigned int cmd, unsigned long user_a
 						DEBUG("[dma-mod] failed to allocate memory. Line %d\n", __LINE__ - 2);
 					}
 					qitem->id = ubuf.id;
-					dma_queue_enqueue(qitem, &processing_queue);
-					schedule_dma();
+					dma_queue_enqueue(qitem, &drvdata->processing_queue);
+					schedule_dma(drvdata);
 					status = 0;
 				}
 			} else {
@@ -144,18 +175,18 @@ static long dev_ioctl(struct file *filep, unsigned int cmd, unsigned long user_a
 		case WAIT_COMPLETE:
 			DEBUG("[dma-mod] ioctl [WAIT_COMPLETE]\n");
 			if(access_ok(VERIFY_READ, (void *)user_arg, sizeof(struct UBuffer))) {
-				copy_from_user(&ubuf, (void *)user_arg, sizeof(struct UBuffer));				
+				status = copy_from_user(&ubuf, (void *)user_arg, sizeof(struct UBuffer));				
 
-				if((qitem = dma_queue_get(ubuf.id, &completed_queue)) != NULL) {
+				if((qitem = dma_queue_get(ubuf.id, &drvdata->completed_queue)) != NULL) {
 					// remove and free item from completed queue
-					dma_queue_delete(qitem->id, &completed_queue);
+					dma_queue_delete(qitem->id, &drvdata->completed_queue);
 					kfree(qitem);
 					status = 0;
 				}
-				else if((qitem = dma_queue_get(ubuf.id, &processing_queue)) != NULL) {
+				else if((qitem = dma_queue_get(ubuf.id, &drvdata->processing_queue)) != NULL) {
 					// wait until item is moved to completed queue
-					wait_event_interruptible(wq_frame, (qitem = dma_queue_get(ubuf.id, &completed_queue)) != NULL);
-					dma_queue_delete(qitem->id, &completed_queue);
+					wait_event_interruptible(drvdata->wq_frame, (qitem = dma_queue_get(ubuf.id, &drvdata->completed_queue)) != NULL);
+					dma_queue_delete(qitem->id, &drvdata->completed_queue);
 					kfree(qitem);
 					status = 0;
 				}
@@ -172,9 +203,9 @@ static long dev_ioctl(struct file *filep, unsigned int cmd, unsigned long user_a
 		case STATUS_CHECK:
 			DEBUG("[dma-mod] ioctl [STATUS_CHECK]\n");
 			if(access_ok(VERIFY_READ, (void *)user_arg, sizeof(struct UBuffer))) {
-				copy_from_user(&ubuf, (void *)user_arg, sizeof(struct UBuffer));
-				if(dma_queue_get(ubuf.id, &completed_queue) != NULL) { status = DMA_COMPLETED; }
-				else if(dma_queue_get(ubuf.id, &processing_queue) != NULL) { status = DMA_IN_PROGRESS; } 
+				status = copy_from_user(&ubuf, (void *)user_arg, sizeof(struct UBuffer));
+				if(dma_queue_get(ubuf.id, &drvdata->completed_queue) != NULL) { status = DMA_COMPLETED; }
+				else if(dma_queue_get(ubuf.id, &drvdata->processing_queue) != NULL) { status = DMA_IN_PROGRESS; } 
 				else { status = -EINVAL; }
 			} else {
 				status = -EIO;
@@ -194,29 +225,32 @@ static long dev_ioctl(struct file *filep, unsigned int cmd, unsigned long user_a
 // interrupt handler for when a frame finishes
 irqreturn_t frame_finished_handler(int irq, void *dev_id)
 {
+	struct my_drvdata *drvdata;
+	drvdata = dev_id;
+
 	// ackowledge interrupt
-	dma_help_ack_all((void *) dev_base_addr);
+	dma_help_ack_all(drvdata->dev_base_addr);
 
 	// stop DMA
-	dma_help_stop((void *) dev_base_addr);
+	dma_help_stop(drvdata->dev_base_addr);
 
-	// dispath "new_frame" event
-	//atomic_set(&new_frame, 1);
-	//wake_up_interruptible(&wq_frame);
 	return IRQ_WAKE_THREAD;
 }
 
 irqreturn_t frame_finished_threaded(int irq, void *dev_id)
 {
+	struct my_drvdata *drvdata;
 	struct dma_queue_item_t *qitem;
-	qitem = dma_queue_dequeue(&processing_queue);
+
+	drvdata = dev_id;
+	qitem = dma_queue_dequeue(&drvdata->processing_queue);
 
 	if(qitem) {
-		dma_queue_enqueue(qitem, &completed_queue);
+		dma_queue_enqueue(qitem, &drvdata->completed_queue);
 	}
 
-	wake_up_interruptible(&wq_frame);
-	schedule_dma();
+	wake_up_interruptible(&drvdata->wq_frame);
+	schedule_dma(drvdata);
 	return IRQ_HANDLED;
 }
 
@@ -232,26 +266,38 @@ static struct file_operations fops = {
 static int dev_probe(struct platform_device *pdev)
 {
 	int status;
+	struct my_drvdata *drvdata;
 	DEBUG("[dma-mod] dev_probe entry\n");
+
+	if(atomic_read(&ndevs) >= MAX_DEVS) {
+		DEBUG("[dma-mod] driver can support only up to %d devices\n", MAX_DEVS);
+		return -ENOMEM;
+	}
+
+	drvdata = kmalloc(sizeof(struct my_drvdata), GFP_KERNEL);
+	if(!drvdata) {
+		DEBUG("[dma-mod] failed to allocate memory for driver data\n");
+		return -ENOMEM;
+	}
 
 	// get device interrupt and register interrupt callback
 	DEBUG("[dma-mod] setting up irq handler\n");
-	irq_res = platform_get_resource(pdev, IORESOURCE_IRQ, 0);
-	if(irq_res == NULL) {
+	drvdata->irq_res = platform_get_resource(pdev, IORESOURCE_IRQ, 0);
+	if(drvdata->irq_res == NULL) {
 		ERROR("[dma-mod] IRQ lookup failed. Check device tree\n");
 		return -ENODEV;
 	}
-	status = request_threaded_irq(irq_res->start, frame_finished_handler, 
-		frame_finished_threaded, 0, "xilcam", NULL);
-	DEBUG("[dma-mod] IRQ handler registered, device IRQ number is %llu\n", irq_res->start);
+	status = request_threaded_irq(drvdata->irq_res->start, frame_finished_handler, 
+		frame_finished_threaded, 0, "xilcam", drvdata);
+	DEBUG("[dma-mod] IRQ handler registered, device IRQ number is %llu\n", drvdata->irq_res->start);
 
 	// dynamically get device's register space info
 	DEBUG("[dma-mod] getting device register space\n");
-	reg_res = platform_get_resource(pdev, IORESOURCE_MEM, 0);
-	if(reg_res == NULL) {
-		if(irq_res) {
-			free_irq(irq_res->start, NULL);
-			irq_res = NULL;
+	drvdata->reg_res = platform_get_resource(pdev, IORESOURCE_MEM, 0);
+	if(drvdata->reg_res == NULL) {
+		if(drvdata->irq_res) {
+			free_irq(drvdata->irq_res->start, NULL);
+			drvdata->irq_res = NULL;
 		}
 		ERROR("[dma-mod] Register space lookup failed. Check device tree\n");
 		return -ENODEV;
@@ -259,68 +305,64 @@ static int dev_probe(struct platform_device *pdev)
 
 	// we only need to ioremap a small chunk
 	// so we'll remap a page
-	dev_base_addr = ioremap(reg_res->start, PAGE_SIZE);
-	if(dev_base_addr == NULL) {
-		if(irq_res) {
-			free_irq(irq_res->start, NULL);
-			irq_res = NULL;
+	drvdata->dev_base_addr = ioremap(drvdata->reg_res->start, PAGE_SIZE);
+	if(drvdata->dev_base_addr == NULL) {
+		if(drvdata->irq_res) {
+			free_irq(drvdata->irq_res->start, NULL);
+			drvdata->irq_res = NULL;
 		}
-		reg_res = NULL;
+		drvdata->reg_res = NULL;
 		ERROR("[dma-mod] failed to ioremap device register space\n");
 		return -ENODEV;
 	}
 	DEBUG("[dma-mod] device register space remapped successfully\n");
-
-	// dynamically allocate a major number for the device
-	majorNumber = register_chrdev(0, DEVICE_NAME, &fops);
-	if(majorNumber < 0) {
-		WARNING("[dma-mod]: failed to register a major number for device [%s]\n", DEVICE_NAME);
-		return majorNumber;
-	}
-	DEBUG("[dma-mod]: registered device [%s] with major number [%d]\n", DEVICE_NAME, majorNumber);
-
-	// register the device class
-	drvClass = class_create(THIS_MODULE, CLASS_NAME);
-	if(IS_ERR(drvClass)) {
-		unregister_chrdev(majorNumber, DEVICE_NAME);
-		WARNING("[dma-mod]: failed to register device class [%s]\n", CLASS_NAME);
-		return PTR_ERR(drvClass);
-	}
-	DEBUG("[dma-mod]: device class [%s] registered successfully\n", CLASS_NAME);
-
-	// register the device driver
-	drvDevice = device_create(drvClass, NULL, MKDEV(majorNumber, 0), NULL, DEVICE_NAME);
-	if(IS_ERR(drvDevice)) {
-		class_destroy(drvClass);
-		unregister_chrdev(majorNumber, DEVICE_NAME);
-		WARNING("[dma-mod]: failed to register device [%s]\n", DEVICE_NAME);
-		return PTR_ERR(drvDevice);
-	}
 	
-	DEBUG("[dma-mod]: device driver registered successfully\n");
+	// keep a record the platform_device pointer
+	drvdata->pdev = pdev;
+
+	// record device's MAJOR and MINOR
+	drvdata->dev_num = MKDEV(MAJOR(global_dev_num), atomic_read(&ndevs));
+	
+	// create device node with udev
+	drvdata->dev = device_create(drvClass, &pdev->dev, drvdata->dev_num,
+						NULL, "%s%d", CLASSNAME, MINOR(drvdata->dev_num));
+	
+	// reset nOpens count
+	drvdata->nOpens = 0;
+
+	// save device data
+	platform_set_drvdata(pdev, drvdata);
+	dev_set_drvdata(drvdata->dev, drvdata);
+
+	// initialize character device
+	cdev_init(&drvdata->cdev, &fops);
+	cdev_add(&drvdata->cdev, drvdata->dev_num, 1);
+
+	// increment device count
+	atomic_inc(&ndevs);
+
 	DEBUG("[dma-mod] dev_probe exit\n");
 	return 0;
 }
 
 static int dev_remove(struct platform_device *pdev)
 {
-	DEBUG("[dma-mod] dev_remove entry\n");
-	if(irq_res) {
-		free_irq(irq_res->start, NULL);
-		irq_res = NULL;
-	}
-	if(dev_base_addr) {
-		iounmap(dev_base_addr);
-		dev_base_addr = NULL;
-		reg_res = NULL;
-	}
+	struct my_drvdata *drvdata;
 
-	device_destroy(drvClass, MKDEV(majorNumber, 0)); 	// remove the device driver
-	class_unregister(drvClass); 							// unregister the device class
-	class_destroy(drvClass); 							// remove the device class
-	unregister_chrdev(majorNumber, DEVICE_NAME); 			// unregister the major number
-	DEBUG("[dma-mod]: device driver exited successfully\n");
-	DEBUG("[dma-mod] dev_remove exit \n");
+	DEBUG("[dma-mod] dev_remove entry\n");
+	drvdata = platform_get_drvdata(pdev);
+	if(!drvdata) {
+		DEBUG("[dma-mod] no device data found\n");
+	} else {
+		free_irq(drvdata->irq_res->start, drvdata);
+		iounmap(drvdata->dev_base_addr);
+		device_destroy(drvClass, drvdata->dev_num);
+		cdev_del(&drvdata->cdev);
+		kfree(drvdata);
+	}
+	atomic_dec(&ndevs);
+
+	DEBUG("[dma-mod] dev_remove exit\n");
 	return 0;
 }
 
@@ -340,5 +382,37 @@ static struct platform_driver dma_driver =  {
 	.remove = dev_remove,
 };
 
-// register platform DMA driver
-module_platform_driver(dma_driver);
+// driver initialization and tear-down
+static int __init dev_init(void)
+{
+	int status;
+
+	DEBUG("[dma-mod] dev_init entry\n");
+
+	atomic_set(&ndevs, 0);
+	status = alloc_chrdev_region(&global_dev_num, 0, MAX_DEVS, CLASSNAME);
+	if(status < 0) {
+		DEBUG("[dma-mod] failed to alloc_chrdev_region\n");
+		return status;
+	}
+	drvClass = class_create(THIS_MODULE, CLASSNAME);
+	platform_driver_register(&dma_driver);
+
+	DEBUG("[dma-mod] dev_init exit\n");
+	return 0;
+}
+
+static void __exit dev_exit(void)
+{
+	DEBUG("[dma-mod] dev_exit entry\n");
+
+	unregister_chrdev_region(MKDEV(MAJOR(global_dev_num), 0), MAX_DEVS);
+	platform_driver_unregister(&dma_driver);
+	class_destroy(drvClass);
+	atomic_set(&ndevs, 0);
+
+	DEBUG("[dma-mod] dev_exit exit\n");
+}
+
+module_init(dev_init);
+module_exit(dev_exit);
