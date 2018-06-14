@@ -3,7 +3,7 @@ KER_DIR	:= "/home/gedeon/temp/zynqmp/kernel-source"
 arch = arm64
 COMP = aarch64-linux-gnu-
 
-obj-m	:= dma.o cmabuffer.o
+obj-m	:= dma.o cmabuffer.o hwacc.o
 
 dma-objs	:= dma_driver.o dma_help.o dma_queue.o
 cmabuffer-objs := cma_driver.o kbuffer.o
