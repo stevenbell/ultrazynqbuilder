@@ -609,7 +609,7 @@ CONFIG.c_sg_include_stscntrl_strm {0} \
   % for stream in module['streams']:
   # AXI-stream interface ${stream['name']}
     % if stream['type'] == 'input':
-      % if stream['depth'] != 2:
+      % if stream['depth'] not in [1, 2, 4, 8, 16, 32]:
   # Input stream width is ${stream['depth']}, so we need a dwidth converter
   <% stream['dwc'] = module['name'] + '_dwidth_' + stream['name'] %>
   set ${stream['dwc']} [ create_bd_cell -type ip -vlnv xilinx.com:ip:axis_dwidth_converter:1.1 ${stream['dwc']} ]
@@ -628,7 +628,7 @@ CONFIG.c_sg_include_stscntrl_strm {0} \
   set ${module['name']}_${stream['name']}_connection ${module['name']}/${stream['name']}
       % endif
     % elif stream['type'] == 'output':
-      % if stream['depth'] != 2:
+      % if stream['depth'] not in [1, 2, 4, 8, 16, 32]:
   # Output stream width is ${stream['depth']}, so we need a dwidth converter
   <% stream['dwc'] = module['name'] + '_dwidth_' + stream['name'] %>
   set ${stream['dwc']} [ create_bd_cell -type ip -vlnv xilinx.com:ip:axis_dwidth_converter:1.1 ${stream['dwc']} ]
@@ -687,13 +687,13 @@ CONFIG.c_sg_include_stscntrl_strm {0} \
 
     % if module['type'] == 'dma':
       ## Configure the DMA MM2S channel
-  set_property -dict [list CONFIG.c_include_mm2s {1} CONFIG.c_m_axis_mm2s_tdata_width {16}] [get_bd_cells ${module['name']}]
+  set_property -dict [list CONFIG.c_include_mm2s {1} CONFIG.c_m_axis_mm2s_tdata_width {${module["mm2s_width"]}}] [get_bd_cells ${module['name']}]
   apply_bd_automation -rule xilinx.com:bd_rule:axi4 -config "Slave /zynq_ultra_ps_e_0/S_AXI_HPC0_FPD intc_ip /data_xconn Clk_xbar $dataclk Clk_master $dataclk Clk_slave $dataclk "  [get_bd_intf_pins ${module['name']}/M_AXI_MM2S]
   set srcpin ${module['name']}/M_AXIS_MM2S
   <% irqs.append(module['name'] + "/mm2s_introut")  %>
   % if not module["out_connected"]:
     ## disable the output channel otherwise the dtc is going to error out
-    set_property -dict [list CONFIG.c_include_s2mm {0}] [get_bd_cells ${module["name"]}]
+  set_property -dict [list CONFIG.c_include_s2mm {0}] [get_bd_cells ${module["name"]}]
   %endif
     % elif module['type'] == 'hls':
 ## HACK: just get the first output
