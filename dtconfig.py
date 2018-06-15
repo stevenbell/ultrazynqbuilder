@@ -92,9 +92,12 @@ for key in sorted(overlay.iterkeys()):
 	dt_overlay += "\n\t" + prop_name_node_name + " = " + "\"" + overlay[key]['definition']['name'] + "\";"
 
 	if overlay[key]['definition']['type'] == 'dma':
-		dt_overlay += "\n\tcompatible = \"" + dma_compatible_string + "\";"
-		dt_overlay += "\n\tdirection = <" + str(overlay[key]['direction']) + ">;"
-		dt_overlay += "\n\t" + prop_name_hls_ref + " = <&" + overlay[key]['hls-node'] + ">;"
+		if overlay[key]['hls-node'] == "":
+			dt_overlay += "\n\tcompatible = \"xilcam\";"
+		else:
+			dt_overlay += "\n\tcompatible = \"" + dma_compatible_string + "\";"
+			dt_overlay += "\n\tdirection = <" + str(overlay[key]['direction']) + ">;"
+			dt_overlay += "\n\t" + prop_name_hls_ref + " = <&" + overlay[key]['hls-node'] + ">;"
 	else:
 		dt_overlay += "\n\tcompatible = \"" + hls_compatible_string + "\";"
 		dt_overlay += "\n\tgpio = <&axi_gpio_1>;"
