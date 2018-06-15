@@ -13,7 +13,9 @@
  * 28 February 2014
  */
 
+#include <linux/init.h>
 #include <linux/module.h>
+#include <linux/kernel.h>
 #include <linux/cdev.h> // Character device
 #include <linux/slab.h> // kmalloc
 #include <asm/io.h> // ioremap and friends
@@ -35,9 +37,10 @@
 #include "dma_bufferset.h"
 #include "ioctl_cmds.h"
 
-// The Linux kernel keeps track of whether it has been "tainted" with non-GPL
-// kernel modules.  GPL may not be the right thing to put here.
 MODULE_LICENSE("GPL");
+MODULE_AUTHOR("MH Students");
+MODULE_DESCRIPTION("Driver for halide hw nodes");
+MODULE_VERSION("1.2");
 
 #define CLASSNAME "hwacc" // Shows up in /sys/class
 #define DEVNAME "hwacc" // Shows up in /dev
@@ -930,6 +933,7 @@ failed:
 
 static int hwacc_probe(struct platform_device *pdev)
 {
+		DEBUG("[hwacc] probe function entry\n");
         struct hwacc_drvdata *drvdata;
         struct resource *io;
 
@@ -1029,7 +1033,7 @@ static int hwacc_probe(struct platform_device *pdev)
         platform_set_drvdata(pdev, drvdata);
         dev_set_drvdata(drvdata->pipe_dev, drvdata);
 
-        DEBUG("Driver initialized\n");
+        DEBUG("[hwacc] probe function exit\n");
 
         return(0);
 
@@ -1044,6 +1048,7 @@ failed0:
 
 static int hwacc_remove(struct platform_device *pdev)
 {
+		DEBUG("[hwacc] hwacc_remove entry\n");
         int i;
         struct hwacc_drvdata *drvdata = platform_get_drvdata(pdev);
 
@@ -1062,6 +1067,7 @@ static int hwacc_remove(struct platform_device *pdev)
         device_usage[drvdata->dev_index] = false;
 
         dev_notice(&pdev->dev, "hwacc removed");
+        DEBUG("[hwacc] hwacc_remove exit\n");
         return(0);
 }
 
@@ -1090,17 +1096,23 @@ static int uevent(struct device *dev, struct kobj_uevent_env *env)
 
 static int __init hwacc_init(void)
 {
+		int ret = 0;
+		DEBUG("[hwacc] hwacc_init entry\n");
         pipe_class = class_create(THIS_MODULE, CLASSNAME);
         /* allow non-root access */
         pipe_class->dev_uevent = uevent;
-        return platform_driver_register(&hwacc_driver);
+        ret = platform_driver_register(&hwacc_driver);
+        DEBUG("[hwacc] hwacc_init exit\n");
+        return ret;
 }
 
 static void __exit hwacc_exit(void)
 {
+		DEBUG("[hwacc] hwacc_exit entry\n");
         platform_driver_unregister(&hwacc_driver);
         /* class destory has to happen after unregister */
         class_destroy(pipe_class);
+        DEBUG("[hwacc] hwacc_exit exit \n");
 }
 
 /*
