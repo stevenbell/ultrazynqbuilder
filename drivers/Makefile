@@ -8,7 +8,7 @@ obj-m	:= dma.o cmabuffer.o hwacc.o
 dma-objs	:= dma_driver.o dma_help.o dma_queue.o
 cmabuffer-objs := cma_driver.o kbuffer.o
 streamgen-objs := stream_driver.o
-hwacc-objs	:= hwacc.o dma_bufferset.o
+hwacc-objs	:= hwacc_driver.o dma_bufferset.o
 
 all:
 	$(MAKE) ARCH=$(arch) CROSS_COMPILE=$(COMP) -C $(KER_DIR) M=$(PWD) modules
