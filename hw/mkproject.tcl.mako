@@ -559,15 +559,15 @@ CONFIG.C_GPIO_WIDTH {3} \
   connect_bd_net [get_bd_pins ${module['name']}_csirx/rxbyteclkhs_resetn] [get_bd_pins ${module['name']}_reset/peripheral_aresetn]
 
   # Connect AXI-lite for csirx
-  apply_bd_automation -rule xilinx.com:bd_rule:axi4 -config "Master /zynq_ultra_ps_e_0/M_AXI_HPM0_LPD intc_ip /control_xconn Clk_xbar Auto Clk_master $controlclk Clk_slave $controlclk "  [get_bd_intf_pins ${module['name']}_csirx/RegSpace_S_AXI]
+  apply_bd_automation -rule xilinx.com:bd_rule:axi4 -config "Master /zynq_ultra_ps_e_0/M_AXI_HPM0_LPD intc_ip /control_xconn Clk_xbar Auto Clk_master $controlclk Clk_slave $controlclk "  [get_bd_intf_pins ${module['name']}_csirx/regspace_s_axi]
 
   # And connect the PPI
-  connect_bd_intf_net [get_bd_intf_pins ${module['name']}_dphy/rx_mipi_ppi_if] [get_bd_intf_pins ${module['name']}_csirx/rx_mipi_ppi_if_1]
+  connect_bd_intf_net [get_bd_intf_pins ${module['name']}_dphy/rx_mipi_ppi_if] [get_bd_intf_pins ${module['name']}_csirx/input_mipi_ppi]
 
   # Connect FIFO to handle clock crossing
   set ${module['name']}_fifo [ create_bd_cell -type ip -vlnv xilinx.com:ip:axis_data_fifo:1.1 ${module['name']}_fifo ]
   set_property -dict [list CONFIG.FIFO_DEPTH {256} CONFIG.IS_ACLK_ASYNC {1} ] $${module['name']}_fifo
-  connect_bd_intf_net [get_bd_intf_pins ${module['name']}_fifo/S_AXIS] [get_bd_intf_pins ${module['name']}_csirx/Output_M_AXIS]
+  connect_bd_intf_net [get_bd_intf_pins ${module['name']}_fifo/S_AXIS] [get_bd_intf_pins ${module['name']}_csirx/output_m_axis]
 
   connect_bd_net [get_bd_pins ${module['name']}_fifo/s_axis_aclk] [get_bd_pins ${module['name']}_dphy/rxbyteclkhs]
   connect_bd_net [get_bd_pins ${module['name']}_fifo/s_axis_aresetn] [get_bd_pins ${module['name']}_reset/peripheral_aresetn]
