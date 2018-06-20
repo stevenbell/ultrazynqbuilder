@@ -62,7 +62,7 @@ for module in params["hw"]:
     input_dmas = []
     specified_dmas = []
     for dma in params["hw"]:
-      if dma["type"] not in input_types:
+      if dma["type"] not in input_types or not dma.has_key("outputto"):
         continue
       # we have found an input dma channel
       if dma["outputto"] == module["name"]:
