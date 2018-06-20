@@ -105,7 +105,7 @@ static int dev_open(struct inode *inodep, struct file *filep)
 	init_waitqueue_head(&drvdata->wq_frame);
 
 	// allocate space for SG descriptor
-	drvdata->sg_base_addr = devm_kzalloc(drvdata->dev, DESC_SIZE, GFP_KERNEL);
+	drvdata->sg_base_addr = kmalloc(DESC_SIZE, GFP_KERNEL);
 	if(drvdata->sg_base_addr == NULL) return -ENOMEM;
 	
 	// copy drvdata to filep
@@ -124,7 +124,7 @@ static int dev_close(struct inode *inodep, struct file *filep)
 	drvdata = container_of(inodep->i_cdev, struct my_drvdata, cdev);
 	dma_help_stop(drvdata->dev_base_addr);
 	drvdata->nOpens = 0;
-	if(drvdata->sg_base_addr) devm_kfree(drvdata->dev, drvdata->sg_base_addr);
+	if(drvdata->sg_base_addr) kfree(drvdata->sg_base_addr);
 	filep->private_data = NULL;
 
 	DEBUG("dev_close exit\n");
