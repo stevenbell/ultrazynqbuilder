@@ -16,6 +16,9 @@
 
 #include "dma_help.h"
 #include "dma.h"
+#include "common.h"
+
+static const int debug_level = 4;
 
 #define MAKE_RD_IOPTR(ptr) ((void *)(ptr))
 #define MAKE_WR_IOPTR(ptr) ((void *)(ptr))
@@ -49,12 +52,16 @@ void dma_help_run_once(void *reg_space, void *sg_table, struct KBuffer *buf)
 {
 	char *dma_addr;
 	u32 *sg_addr;
+	u32 sg_addr_phys;
+	DEBUG("[dma-mod] dma_help_run_once entry\n");
 
 	dma_addr = (char *) reg_space;	
 	sg_addr = (u32 *) sg_table;
+	sg_addr_phys = (u32) virt_to_phys(sg_table);
+	DEBUG("[dma-mod] SG Phys Addr = 0x%08x\n", sg_addr_phys);
 
 	// setup SG descriptor
-	sg_addr[0] = (u32) virt_to_phys(sg_table) + 0x40; // Next descriptor
+	sg_addr[0] = sg_addr_phys; // only one descriptor
 	sg_addr[1] = 0; // Upper 32 bits, not used
 	sg_addr[2] = buf->phys_addr & 0xFFFFFFFF; // Data base address
 	sg_addr[3] = 0; // Upper 32 bits, not used
@@ -64,13 +71,15 @@ void dma_help_run_once(void *reg_space, void *sg_table, struct KBuffer *buf)
 	sg_addr[7] = 0;
 
 	// Starting descriptor
-	iowrite32(virt_to_phys(sg_table), MAKE_WR_IOPTR(dma_addr + S2MM_CURDESC_LSB));
+	iowrite32(sg_addr_phys, MAKE_WR_IOPTR(dma_addr + S2MM_CURDESC_LSB));
 
 	// set IRQThreshold, enable IOC interrupt, and run
 	iowrite32((1 << 16) | (1 << 12) | 1, MAKE_WR_IOPTR(dma_addr + S2MM_ACR));
 
 	// Tail descriptor, kicks off transaction
-	iowrite32(virt_to_phys(sg_table), MAKE_WR_IOPTR(dma_addr + S2MM_TAILDESC_LSB));
+	iowrite32(sg_addr_phys, MAKE_WR_IOPTR(dma_addr + S2MM_TAILDESC_LSB));
+
+	DEBUG("[dma-mod] dma_help_run_once exit\n");
 } 
 
 void dma_help_stop(void *reg_space)

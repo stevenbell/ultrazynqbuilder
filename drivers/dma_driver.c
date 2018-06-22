@@ -242,6 +242,8 @@ irqreturn_t frame_finished_threaded(int irq, void *dev_id)
 	struct my_drvdata *drvdata;
 	struct dma_queue_item_t *qitem;
 
+	DEBUG("[dma-mod] frame_finished bottom-half entry\n");
+
 	drvdata = dev_id;
 	qitem = dma_queue_dequeue(&drvdata->processing_queue);
 
@@ -251,6 +253,7 @@ irqreturn_t frame_finished_threaded(int irq, void *dev_id)
 
 	wake_up_interruptible(&drvdata->wq_frame);
 	schedule_dma(drvdata);
+	DEBUG("[dma-mod] frame_finsihed bottom-half exit\n");
 	return IRQ_HANDLED;
 }
 
