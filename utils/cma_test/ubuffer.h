@@ -12,6 +12,9 @@
 /* user buffer declaration */
 typedef struct UBuffer {
 	U32_TYPE id;		// ID flag for internal use
+	U32_TYPE offset;	// used for slicing purposes
+						// this is the offset in bytes
+						// from the beginning of root buffer
 	U32_TYPE width;		// width of the image
 	U32_TYPE height;	// height of the image
 	U32_TYPE stride;	// stride of the image

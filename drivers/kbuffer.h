@@ -5,6 +5,9 @@
 #define __KERNEL__
 #endif /* __KERNEL__ */
 
+#define __PIXEL_VAL		// annotation to tell that the specified value is in pixels
+#define __BYTE_VAL		// annotation to tell that the specified value is in bytes
+
 /* Linux includes */
 #include <linux/types.h>
 
@@ -17,6 +20,7 @@ typedef struct KBuffer {
 	u64 size; // actual size of memory chunk allocated
 	u64 phys_addr; // physical address of memory chunk allocated
 	void *kern_addr; // kernel virtual address of memory chunk allocated
+	u32	parent_id;	// used for slices. This is the ID of parent (root) buffer
 	struct mMap *cvals;
 	u32 mmap_offset;
 } KBuffer;
@@ -53,13 +57,25 @@ void cleanup_buffers(struct device *dev);
  * @param stride The stride between successive rows of the image frame
  * @return The buffer of requested size, or NULL for failure
  */
-struct KBuffer *acquire_buffer(u32 width, u32 height, u32 depth, u32 stride);
+struct KBuffer *acquire_buffer(u32 __PIXEL_VAL width, u32 __PIXEL_VAL height,
+					u32 __BYTE_VAL depth, u32 __PIXEL_VAL stride);
 
 /* releases the buffer for reallocation
  * @param id The id of the buffer to release
  * @return N/A
  */
 void release_buffer(u32 id);
+
+/* slice a buffer
+ * @param id The id of the buffer to get a slice from
+ * @param offset The offset in pixels to the start of the slice
+ *        !!! when computing the offset, use "stride" instead of "width"
+ * @param width The width of the slice
+ * @param height The height of the slice
+ * @return a slice buffer or NULL if failed to get slice
+ */
+struct KBuffer *slice_buffer(u32 id, u32 __PIXEL_VAL offset,
+					u32 __PIXEL_VAL width, u32 __PIXEL_VAL height);
 
 /* gets a buffer from the list of allocated buffer using the id field
  * @param id The id of the buffer to retrieve

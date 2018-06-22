@@ -39,4 +39,12 @@ int cma_get_buffer(int fd, struct UBuffer *buf);
  */
 int cma_free_buffer(int fd, struct UBuffer *buf);
 
+/* slice a buffer
+ * @param fd The cma driver file descriptor
+ * @param root_id The ID of the buffer to get slice from
+ * @param slice_info The child buffer (the slice) with pre-filled size info
+ * @return 0 if successful, non-zero integer otherwise
+ */
+int cma_slice_buffer(int fd, unsigned root_id, struct UBuffer *slice_info);
+
 #endif /* _CMA_H_ */

@@ -6,8 +6,9 @@
 #define MAGIC			'Z'
 
 /* cma driver */
-#define GET_BUFFER 		_IOWR(MAGIC, 0x20, void *)	 // Get an unused buffer
-#define FREE_BUFFER 	_IOWR(MAGIC, 0x21, void *)	 // Release buffer
+#define GET_BUFFER 		_IOWR(MAGIC, 0x20, void *)	// Get an unused buffer
+#define FREE_BUFFER 	_IOWR(MAGIC, 0x21, void *)	// Release buffer
+#define SLICE_BUFFER	_IOWR(MAGIC, 0x22, void *)	// Slice a buffer
 
 /* dma driver */
 #define ENROLL_BUFFER	_IOWR(MAGIC, 0x40, void *)

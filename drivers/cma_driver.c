@@ -34,7 +34,7 @@ static int majorNumber;
 static struct class *cmaBufClass = NULL;
 static struct device *cmaBufDevice = NULL;
 
-static unsigned nOpens = 0;
+static atomic_t nOpens;
 
 /* driver parameters */
 static int mode = 1;				// by default, buffer management mode is DYNAMIC
@@ -114,6 +114,8 @@ static int __init dev_init(void)
 		DEBUG("[cmabuf] successfully initialized buffers\n");
 	}
 
+	atomic_set(&nOpens, 0);
+
 	return status;
 }
 
@@ -133,13 +135,7 @@ static void __exit dev_exit(void)
 static int dev_open(struct inode *inodep, struct file *filep)
 {
 	DEBUG("[cmabuf]: dev_open entry\n");
-
-	// currently not supporting multiple concurrent openings yet
-	if(nOpens >= 1) {
-		WARNING("[cmabuf]: dev_open : no support for multiple concurrent opens\n");
-		return -EBUSY;
-	}
-	nOpens++;
+	atomic_inc(&nOpens);
 	DEBUG("[cmabuf]: dev_open exit\n");
 	return 0;
 }
@@ -149,10 +145,7 @@ static int dev_open(struct inode *inodep, struct file *filep)
 static int dev_release(struct inode *inodep, struct file *filep)
 {
 	DEBUG("[cmabuf]: dev_release entry\n");
-
-	// no support for multiple device closings
-	// assume only one device opened
-	nOpens = 0;
+	atomic_dec(&nOpens);
 	DEBUG("[cmabuf]: dev_release exit\n");
 	return 0;
 }
@@ -198,7 +191,26 @@ static long dev_ioctl(struct file *filep, unsigned int cmd, unsigned long arg)
 				DEBUG("[cmabuf]: releasing buffer [id = %u]\n", ubuf.id);
 				release_buffer(ubuf.id);
 			} else { return(-EIO); }
-		break; // FREE_IMAGE
+		break; // FREE_BUFFER
+
+		case SLICE_BUFFER:
+			DEBUG("[cmabuf]: ioctl [SLICE_BUFFER]\n");
+
+			// copy user buffer
+			if(access_ok(VERIFY_READ, (void *)arg, sizeof(struct UBuffer)) &&
+					(copy_from_user(&ubuf, (void *)arg, sizeof(struct UBuffer))) == 0) {
+
+				kbufPtr = slice_buffer(ubuf.id, ubuf.offset, ubuf.width, ubuf.height);
+				if(kbufPtr == NULL) {
+					DEBUG("[cmabuf] failed to slice buffer [id = %u]\n", ubuf.id);
+					return -EINVAL;
+				}
+				if(copy_to_user((void *)arg, &kbufPtr->xdomain, sizeof(struct UBuffer)) != 0) {
+					DEBUG("[cmabuf] failed to copy slice to user\n");
+					return -EIO;
+				}
+			} else { return(-EIO); }
+		break; // SLICE_BUFFER
 
 		default:
 			//unknown command

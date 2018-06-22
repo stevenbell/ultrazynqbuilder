@@ -1,7 +1,8 @@
+CC	= aarch64-linux-gnu-gcc
 APP = test_cma
 
-# Add any other object files to this list below
-APP_OBJS = cma.o test_cma.o
+APP_SRC		= $(wildcard *.c);
+APP_OBJS	= $(APP_SRC:.c=.o) 
 
 all: build
 

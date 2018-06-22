@@ -5,6 +5,7 @@
 #include <linux/string.h>
 #include <linux/of_device.h>
 #include <linux/list.h>
+#include <linux/mutex.h>
 #include <asm/page.h>
 #include <linux/slab.h>
 
@@ -23,7 +24,7 @@ static enum KBufferMode mode = DYNAMIC;
 static unsigned initialized = 0;
 
 // ID counter
-static u32 ID_counter = 0;
+static atomic_t ID_counter;
 
 // this struct adds fields to KBuffer
 // that are used only here
@@ -35,6 +36,9 @@ struct KBufferRecord {
 
 // list of KBufferRecords allocated
 static LIST_HEAD(KBufferRecords);
+static struct mutex rec_lock;
+#define MUTEX_LOCK(lock)	while(mutex_lock_interruptible(&lock))
+#define MUTEX_UNLOCK(lock)	mutex_unlock(&lock)
 
 // private helpers
 static u64 page_aligned_size(u64 size);
@@ -56,6 +60,7 @@ int init_buffers(struct device *dev, enum KBufferMode alloc_mode, u64 static_blo
 	u64 dma_mask;
 
 	n_blocks_allocated = 0;
+	atomic_set(&ID_counter, 0);
 
 	// re-initialize if buffer management system is already initialized
 	// this might be needed if any of the following parameters are to be changed on the fly
@@ -65,6 +70,8 @@ int init_buffers(struct device *dev, enum KBufferMode alloc_mode, u64 static_blo
 	if(initialized) {
 		DEBUG("buffer system re-initialization\n");
 		cleanup_buffers(dev);
+	} else {
+		mutex_init(&rec_lock);
 	}
 
 	// configure the DMA masks
@@ -126,10 +133,14 @@ int init_buffers(struct device *dev, enum KBufferMode alloc_mode, u64 static_blo
 					record->kbuf.size = actual_size;
 					record->kbuf.phys_addr = phys_addr;
 					record->kbuf.kern_addr = kern_addr;
+					record->kbuf.parent_id = 0;
 
-					record->kbuf.xdomain.id = ID_counter++;
-
+					record->kbuf.xdomain.id = (u32) atomic_inc_return(&ID_counter);
+					
+					MUTEX_LOCK(rec_lock);
 					list_add(&record->list, &KBufferRecords);
+					MUTEX_UNLOCK(rec_lock);
+
 					DEBUG("KBufferRecord provisioned and added to list\n");
 
 					n_blocks_allocated += 1;
@@ -153,7 +164,12 @@ int init_buffers(struct device *dev, enum KBufferMode alloc_mode, u64 static_blo
 
 void cleanup_buffers(struct device *dev)
 {
+	// used for root buffers
 	struct KBufferRecord *record;
+
+	// used for slices
+	struct list_head *cur_pos, *next_pos;
+	struct KBufferRecord *slice;
 
 	// do nothing if buffer allocation system
 	// is not yet initialized
@@ -162,24 +178,42 @@ void cleanup_buffers(struct device *dev)
 		return;
 	}
 
+	MUTEX_LOCK(rec_lock);
 	record = list_first_entry_or_null(&KBufferRecords, struct KBufferRecord, list);
+	MUTEX_UNLOCK(rec_lock);
 
 	while (record != NULL) {
+ 
+		// remove slices, if any
+		MUTEX_LOCK(rec_lock);
+		list_for_each_safe(cur_pos, next_pos, &KBufferRecords) {
+			slice = list_entry(cur_pos, struct KBufferRecord, list);
+			if(slice->kbuf.parent_id == record->kbuf.xdomain.id) {
+				// remove slice from record list
+				list_del(cur_pos);
+				
+				// free record
+				kfree(slice);
+			}
+		}
+		
+		// remove record from list
+		list_del(&record->list);
+		MUTEX_UNLOCK(rec_lock);
+		DEBUG("removed KBufferRecord from list\n");
 
 		// free memory chunk associated with this KBufferRecord
 		DEBUG("freeing memory chunk associated with buffer record\n");
 		dma_free_coherent(dev, (size_t) record->kbuf.size, record->kbuf.kern_addr, record->kbuf.phys_addr);
-
-		// remove record from list
-		DEBUG("removing KBufferRecord from list\n");
-		list_del(&record->list);
 
 		// free memory allocated for KBufferRecord 
 		DEBUG("freeing memory allocated to KBufferRecord object\n");
 		kfree(record);
 
 		// get next record
+		MUTEX_LOCK(rec_lock);
 		record = list_first_entry_or_null(&KBufferRecords, struct KBufferRecord, list);
+		MUTEX_UNLOCK(rec_lock);
 	}
 
 	DEBUG("buffer cleanup complete\n");
@@ -203,8 +237,10 @@ struct KBuffer *acquire_buffer(u32 width, u32 height, u32 depth, u32 stride)
 
 	// traverse the list of KBufferRecords to find 
 	// a chunk of memory that fits and is available
+	MUTEX_LOCK(rec_lock);
 	list_for_each_entry(record, &KBufferRecords, list) {
-		if(record && record->free && record->kbuf.size >= stride * height * depth) {
+		if(record && record->free && record->kbuf.size >= stride * height * depth &&
+				record->kbuf.parent_id == 0) {
 			record->free = 0;
 			record->kbuf.xdomain.width = width;
 			record->kbuf.xdomain.height = height;
@@ -215,6 +251,7 @@ struct KBuffer *acquire_buffer(u32 width, u32 height, u32 depth, u32 stride)
 			break;
 		}
 	}
+	MUTEX_UNLOCK(rec_lock);
 
 	// if we're in STATIC mode and if no chunk that fits is available,
 	// then return NULL
@@ -260,14 +297,17 @@ struct KBuffer *acquire_buffer(u32 width, u32 height, u32 depth, u32 stride)
 	record->kbuf.size = block_size;
 	record->kbuf.phys_addr = phys_addr;
 	record->kbuf.kern_addr = kern_addr;
+	record->kbuf.parent_id = 0;
 
-	record->kbuf.xdomain.id = ID_counter++;
+	record->kbuf.xdomain.id = (u32) atomic_inc_return(&ID_counter);
 	record->kbuf.xdomain.width = width;
 	record->kbuf.xdomain.height = height;
 	record->kbuf.xdomain.depth = depth;
 	record->kbuf.xdomain.stride = stride;
 
+	MUTEX_LOCK(rec_lock);
 	list_add(&record->list, &KBufferRecords);
+	MUTEX_UNLOCK(rec_lock);
 
 	DEBUG("successfully aquired buffer in DYNAMIC mode\n");
 	return &record->kbuf;
@@ -275,10 +315,30 @@ struct KBuffer *acquire_buffer(u32 width, u32 height, u32 depth, u32 stride)
 
 void release_buffer(u32 id)
 {
+	// used for root buffer
 	struct KBufferRecord *target;
+
+	// used for child (slice) buffers
+	struct list_head *cur_pos, *next_pos;
+	struct KBufferRecord *record;
+
 	target = get_buffer_rec(id);
 
 	if(target == NULL) return;
+
+	// remove slices, if any
+	MUTEX_LOCK(rec_lock);
+	list_for_each_safe(cur_pos, next_pos, &KBufferRecords) {
+		record = list_entry(cur_pos, struct KBufferRecord, list);
+		if(record->kbuf.parent_id == id) {
+			// remove slice from record list
+			list_del(cur_pos);
+
+			// free record
+			kfree(record);
+		}
+	}
+	MUTEX_UNLOCK(rec_lock);
 
 	// in STATIC mode, just make the chunk free again
 	if (mode == STATIC) {
@@ -306,12 +366,14 @@ struct KBuffer *get_buffer_by_id(u32 id)
 	record = NULL;
 	target = NULL;
 
+	MUTEX_LOCK(rec_lock);
 	list_for_each_entry(record, &KBufferRecords, list) {
 		if(record && record->kbuf.xdomain.id == id) {
 			target = record;
 			break;
 		}
 	}
+	MUTEX_UNLOCK(rec_lock);
 
 	return (target ? &target->kbuf : NULL);
 }
@@ -335,19 +397,65 @@ static struct KBufferRecord *get_buffer_rec(u64 id)
 	record = NULL;
 	target = NULL;
 
+	MUTEX_LOCK(rec_lock);
 	list_for_each_entry(record, &KBufferRecords, list) {
 		if(record && record->kbuf.xdomain.id == id) {
 			target = record;
 			break;
 		}
 	}
+	MUTEX_UNLOCK(rec_lock);
 
 	return target;
 }
 
 /* for test purposes */
 int is_empty_list(void) {
-	return list_empty(&KBufferRecords);
+	int ret;
+	MUTEX_LOCK(rec_lock);
+	ret = list_empty(&KBufferRecords);
+	MUTEX_UNLOCK(rec_lock);
+	return ret;
+}
+
+struct KBuffer *slice_buffer(u32 id, u32 offset, u32 width, u32 height)
+{
+	struct KBuffer *root;
+	struct KBufferRecord *slice;
+
+	root = get_buffer_by_id(id);
+	if(root == NULL) return NULL;
+
+	// verify that the slice will fit in root buffer
+	if(((offset % root->xdomain.stride) + width) > root->xdomain.width) {
+		// horizontal fit test failed
+		return NULL;
+	} else if(((offset / root->xdomain.stride) + height) > root->xdomain.height) {
+		// vertical fit test failed
+		return NULL;
+	}
+
+	// create a record for the slice
+	slice = kmalloc(sizeof(struct KBufferRecord), GFP_KERNEL);
+	if(slice == NULL) {
+		return NULL;
+	}
+	slice->kbuf.xdomain.id = (u32) atomic_inc_return(&ID_counter);
+	slice->kbuf.xdomain.offset = offset;
+	slice->kbuf.xdomain.width = width;
+	slice->kbuf.xdomain.height = height;
+	slice->kbuf.xdomain.depth = root->xdomain.depth;
+	slice->kbuf.xdomain.stride = root->xdomain.stride;
+	slice->kbuf.size = ((height - 1)*root->xdomain.stride + width) * root->xdomain.depth;
+	slice->kbuf.phys_addr = root->phys_addr + offset * root->xdomain.depth;
+	slice->kbuf.parent_id = id;
+
+	// add the slice record to record list
+	MUTEX_LOCK(rec_lock);
+	list_add(&slice->list, &KBufferRecords);
+	MUTEX_UNLOCK(rec_lock);
+
+	return &slice->kbuf;
 }
 
 

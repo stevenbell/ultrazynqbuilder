@@ -933,11 +933,11 @@ failed:
 
 static int hwacc_probe(struct platform_device *pdev)
 {
-		DEBUG("[hwacc] probe function entry\n");
         struct hwacc_drvdata *drvdata;
         struct resource *io;
-
         int retval;
+
+		DEBUG("[hwacc] probe function entry\n");
 
         /* alocate drvdata */
         drvdata = devm_kzalloc(&pdev->dev, sizeof(*drvdata), GFP_KERNEL);
@@ -1048,9 +1048,10 @@ failed0:
 
 static int hwacc_remove(struct platform_device *pdev)
 {
-		DEBUG("[hwacc] hwacc_remove entry\n");
         int i;
         struct hwacc_drvdata *drvdata = platform_get_drvdata(pdev);
+		
+		DEBUG("[hwacc] hwacc_remove entry\n");
 
         /* clear each channel */
         for (i = 0; i < drvdata->nr_channels; i++) {

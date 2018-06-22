@@ -39,3 +39,9 @@ int cma_free_buffer(int fd, struct UBuffer *buf)
 {
 	return ioctl(fd, FREE_BUFFER, (void *) buf);
 }
+
+int cma_slice_buffer(int fd, unsigned root_id, struct UBuffer *slice_info)
+{
+	slice_info->id = root_id;
+	return ioctl(fd, SLICE_BUFFER, (void *) slice_info);
+}
