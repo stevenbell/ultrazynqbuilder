@@ -446,7 +446,7 @@ struct KBuffer *slice_buffer(u32 id, u32 offset, u32 width, u32 height)
 	slice->kbuf.xdomain.height = height;
 	slice->kbuf.xdomain.depth = root->xdomain.depth;
 	slice->kbuf.xdomain.stride = root->xdomain.stride;
-	slice->kbuf.size = ((height - 1)*root->xdomain.stride + width) * root->xdomain.depth;
+	slice->kbuf.size = page_aligned_size(((height - 1)*root->xdomain.stride + width) * root->xdomain.depth);
 	slice->kbuf.phys_addr = root->phys_addr + offset * root->xdomain.depth;
 	slice->kbuf.parent_id = id;
 

@@ -242,6 +242,8 @@ static int dev_mmap(struct file *filep, struct vm_area_struct *vma)
 	buffer_id = vma->vm_pgoff & ((1 << 20) - 1);
 	offset = 0;
 	req_size = vma->vm_end - vma->vm_start;
+	DEBUG("[cmabuf] vma->vm_start = 0x%lx\n", vma->vm_start);
+	DEBUG("[cmabuf] vma->vm_end = 0x%lx\n", vma->vm_end);
 
 	// get corresponding buffer
 	kbuf = get_buffer_by_id(buffer_id);
