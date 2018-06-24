@@ -64,6 +64,12 @@ static struct file_operations fops = {
 	.mmap 			= dev_mmap,
 };
 
+static int uevent(struct device *dev, struct kobj_uevent_env *env)
+{
+        add_uevent_var(env, "DEVMODE=%#o", 0766);
+        return 0;
+}
+
 static int __init dev_init(void)
 {
 	enum KBufferMode sys_mode;
@@ -92,6 +98,8 @@ static int __init dev_init(void)
 		WARNING("[cmabuf]: failed to register device class [%s]\n", CLASS_NAME);
 		return PTR_ERR(cmaBufClass);
 	}
+    /* allow non-root access */
+    cmaBufClass->dev_uevent = uevent;
 	DEBUG("[cmabuf]: device class [%s] registered successfully\n", CLASS_NAME);
 
 	// register the device driver

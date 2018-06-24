@@ -47,7 +47,6 @@ MODULE_VERSION("1.2");
 
 #define ACC_CONTROLLER_PAGES 1
 
-
 #define MAX_HWACC_MODULE 8
 
 #define N_DMA_BUFFERSETS 16 // Number of "buffer set" objects for passing through the queues
@@ -56,6 +55,8 @@ MODULE_VERSION("1.2");
 #define SG_DESC_BYTES (SG_DESC_SIZE * 4)  // Size of each descriptor in bytes
 
 #define DMA_MAX_CHANS_PER_DEVICE	0x20
+
+#define TAP_DATA_BASE 0x10
 
 /* these values are copied from the official implementation */
 #define XILINX_DMA_MM2S_CTRL_OFFSET 0x0000
@@ -100,6 +101,15 @@ module_param(use_acp, bool, 0644);
 MODULE_PARM_DESC(use_acp,
                  "enforce cache coherency, if the device uses ACP");
 
+/**
+ * this is number of different taps feeding into the acclerator,
+ * not size of a single tap array.
+ */
+static int max_tap_count = 2;
+module_param(max_tap_count, int, 0644);
+MODULE_PARM_DESC(max_tap_count,
+                "maximum allowed tap count. increase if needed before load");
+
 struct dma_chan {
         struct hwacc_drvdata *drvdata;
         struct device *dev;
@@ -110,6 +120,8 @@ struct dma_chan {
         int id;
         bool input_chan;
         wait_queue_head_t wq;
+
+        int index;
 };
 
 struct hwacc_drvdata {
@@ -383,6 +395,54 @@ void build_sg_chain_2D(const KBuffer buf, unsigned long* sg_ptr_base, unsigned l
 
 }
 
+void write_tap_values(struct hwacc_drvdata *drvdata, UBuffer *buf, void *tap)
+{
+        uint32_t data_size = buf->width * buf->depth;
+        uint8_t *data = kzalloc(data_size, GFP_KERNEL);
+        int retval, i;
+
+        retval = copy_from_user(data, tap, data_size);
+        if (retval) {
+                ERROR("cannot copy data from user addr: %p\n", tap);
+                return;
+        }
+
+        for (i = 0; i < data_size; i++) {
+                uint32_t value;
+                switch (buf->depth) {
+                        case 1: {
+                                        value = data[i];
+                                        break;
+                                }
+                        case 2: {
+                                        uint16_t *d = (uint16_t*)data;
+                                        value = d[i];
+                                        break;
+                                }
+                        case 4: {
+                                        uint32_t *d = (uint32_t*)data;
+                                        value = d[i];
+                                        break;
+                                }
+                        default: {
+                                        DEBUG("Unknown tap size: %d\n",
+                                              buf->depth);
+                                        value = 0;
+                                        break;
+                                 }
+                }
+                // each value is stored in 8-byte register space
+                iowrite32(value, drvdata->hls_controller
+                                 + TAP_DATA_BASE
+                                 + i * 0x08);
+                DEBUG("write %d to hwacc hls_controller: 0x%x\n", value,
+                      TAP_DATA_BASE + i * 0x08);
+        }
+
+        // clean up
+        kfree(data);
+}
+
 /* Sets up a buffer for processing through the stencil path.  This drops the
  * image buffers into a BufferSet object, builds the scatter-gather tables,
  * and flushes the cache. Then it drops the BufferSet into the
@@ -391,21 +451,10 @@ void build_sg_chain_2D(const KBuffer buf, unsigned long* sg_ptr_base, unsigned l
 int process_image(struct hwacc_drvdata *drvdata, KBuffer *buf_list)
 {
   BufferSet* src;
-  int i, flag;
+  int i, flag, tap_count;
   KBuffer *buf;
-  struct dma_chan *chan;
   struct chan_buf *chan_buf;
   int retval;
-
-  for (i = 0; i < drvdata->nr_channels; i++) {
-    chan = drvdata->chan[i];
-    buf = &buf_list[i];
-    if (chan->input_chan) {
-      if (buf->xdomain.width != 170 || buf->xdomain.height != 170 || buf->xdomain.depth != 3) {
-        ERROR("Buffer size for input %d doesn't match hardware!", i);
-      }
-    }
-  }
 
   TRACE("process_image: begin\n");
   // Acquire a bufferset to pass through the processing chain
@@ -415,8 +464,34 @@ int process_image(struct hwacc_drvdata *drvdata, KBuffer *buf_list)
   TRACE("src id is %d\n", src->id);
   TRACE("process_image: got BufferSet\n");
   /* copy buffer address */
+  tap_count = 0;
+  for (i = 0; i < drvdata->nr_channels + tap_count; i++) {
+    /**
+    * Keyi: height == 1 means tap value, which is an 1D array.
+    * set the tap value here directly and then skip the buf,
+    * since we don't have DMA channel on the fabric
+    */
+    if (buf_list[i].xdomain.height != 1) {
+      DEBUG("src->chan_buf_list[%d]\n", i - tap_count);
+      src->chan_buf_list[i - tap_count].buf = buf_list[i];
+    } else {
+      /* set the tap value */
+      // TODO
+      uint64_t addr = 0;
+      uint64_t high = buf_list[i].xdomain.id;
+      addr |= high << 32;
+      addr |= buf_list[i].xdomain.stride;
+      tap_count++;
+      write_tap_values(drvdata, &buf_list[i].xdomain, (void *)addr);
+    }
+  }
+
   for (i = 0; i < drvdata->nr_channels; i++) {
-    src->chan_buf_list[i].buf = buf_list[i];
+    buf = &src->chan_buf_list[i].buf;
+    DEBUG("buffer width: %d height: %d depth: %d\n",
+           buf->xdomain.width,
+           buf->xdomain.height,
+           buf->xdomain.depth);
   }
 
   // Set up the scatter-gather descriptor chains
@@ -594,10 +669,10 @@ long dev_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
         struct hwacc_drvdata *drvdata = filp->private_data;
         struct dma_chan *chan;
         size_t bsize = sizeof(UBuffer);
-        int retval, i;
+        int retval, i, tap_count = 0;
         UBuffer tmp_ubuf;
         KBuffer *tmp_kbuf;
-        KBuffer tmp_buf[drvdata->nr_channels];
+        KBuffer tmp_buf[drvdata->nr_channels + max_tap_count];
 
         DEBUG("ioctl cmd %d | %lu (%lx) \n", cmd, arg, arg);
         switch (cmd) {
@@ -606,7 +681,9 @@ long dev_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
                         if (access_ok(VERIFY_READ,
                                      (void *)arg,
                                      drvdata->nr_channels * bsize)) {
-                                for (i = 0; i < drvdata->nr_channels; i++) {
+                                for (i = 0;
+                                     i < drvdata->nr_channels + tap_count;
+                                     i++) {
                                         chan = drvdata->chan[i];
                                         /* copy_from_user return non-zero
                                          * upon error
@@ -618,11 +695,19 @@ long dev_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
                                                 retval = -EIO;
                                                 goto failed;
                                         }
-                                        tmp_kbuf = get_buffer_by_id(tmp_ubuf.id);
-                                        if(tmp_kbuf == NULL) {
-											retval = -ENOMEM;
+                                        /* test if it's tap value */
+                                        if (tmp_ubuf.height == 1) {
+                                            tap_count++;
+                                            /* only update the xdomain part */
+                                            // TODO: fix this part
+                                            tmp_buf[i].xdomain = tmp_ubuf;
+                                        } else {
+                                            tmp_kbuf = get_buffer_by_id(tmp_ubuf.id);
+                                            if(tmp_kbuf == NULL) {
+                                                retval = -ENOMEM;
+                                            }
+                                            tmp_buf[i] = *tmp_kbuf;
                                         }
-                                        tmp_buf[i] = *tmp_kbuf;
                                 }
                                 return process_image(drvdata, tmp_buf);
                         }
@@ -708,8 +793,8 @@ static irqreturn_t dma_irq_handler(int irq, void *data)
 }
 
 static int dma_chan_probe(struct device_node *node,
-                           struct hwacc_drvdata *drvdata,
-                           int chan_id)
+                          struct hwacc_drvdata *drvdata,
+                          int chan_id)
 {
         struct dma_chan *chan;
         struct device *dev = &drvdata->pdev->dev;
@@ -794,7 +879,8 @@ static int dma_chan_remove(struct dma_chan *chan)
 
 
 static int dma_child_probe(struct device_node *node,
-                           struct hwacc_drvdata *drvdata)
+                           struct hwacc_drvdata *drvdata,
+                           int index)
 {
         int i, retval, nr_channels = 1;
         struct device *dev = &drvdata->pdev->dev;
@@ -804,10 +890,12 @@ static int dma_child_probe(struct device_node *node,
                 dev_err(dev,  "dma-channels not found\n");
                 return retval;
         }
-
+ 
         /* loop through the dma channels */
         for (i = 0; i < nr_channels; i++) {
                 retval = dma_chan_probe(node, drvdata, drvdata->chan_id++);
+                /* set the dma channel index */
+                drvdata->chan[drvdata->nr_channels + i]->index = index;
         }
 
         drvdata->nr_channels += nr_channels;
@@ -815,13 +903,24 @@ static int dma_child_probe(struct device_node *node,
         return 0;
 }
 
+static void swap_dma_channel(struct hwacc_drvdata *drvdata, int index1, int index2)
+{
+        struct dma_chan *temp;
+        temp = drvdata->chan[index2];
+        drvdata->chan[index1]->id = temp->id;
+        temp->id = index1;
+        drvdata->chan[index2] = drvdata->chan[index1];
+        drvdata->chan[index1] = temp;
+        DEBUG("swap between chan: %d and chan %d\n", index1, index2);
+}
+
 static int init_dma(struct hwacc_drvdata *drvdata)
 {
         struct platform_device *pdev = drvdata->pdev, *dma;
         struct resource *io;
         struct device_node *child, *dma_node;
-        struct dma_chan *temp;
-        int i, retval;
+        int i, retval, entry_index, index;
+        const char *dma_name;
         /*
          * find the phandle for dma. we need to read both dmas-in and
          * we don't need to actually distinguish the difference between
@@ -846,9 +945,20 @@ static int init_dma(struct hwacc_drvdata *drvdata)
                         goto failed0;
                 }
 
+
+                retval = of_property_read_u32(dma_node, "dma-index", &index);
+                if (retval < 0) {
+                    /* no dma-index info present, set to -1 to ignore */
+                    index = -1;
+                }
+
+                retval = of_property_read_string(dma_node, "hw-name", &dma_name);
+                if (!retval)
+                    DEBUG("dma name: %s\n", dma_name);
+
                 /* initialize channels */
                 for_each_child_of_node(dma_node, child) {
-                        retval = dma_child_probe(child, drvdata);
+                        retval = dma_child_probe(child, drvdata, index);
                         if (retval < 0)
                                 goto failed1;
                 }
@@ -863,20 +973,14 @@ static int init_dma(struct hwacc_drvdata *drvdata)
          * command to reorder the channels and additional entry in the device
          * tree overlay to indicate the dma index.
          */
-        for (i = 0; i< drvdata->nr_channels; i++) {
+        for (i = 0; i < drvdata->nr_channels; i++) {
             if ((!drvdata->chan[i]->input_chan)
                 && (i != drvdata->nr_channels - 1)) {
                 /*
                  * we've found output data channel and it's not the last
                  * one. swap them
                  */
-                temp = drvdata->chan[drvdata->nr_channels - 1];
-                drvdata->chan[i]->id = temp->id;
-                temp->id = i;
-                drvdata->chan[drvdata->nr_channels - 1] = drvdata->chan[i];
-                drvdata->chan[i] = temp;
-                DEBUG("swap between chan: %d and chan %d\n", i,
-                      drvdata->nr_channels - 1);
+                swap_dma_channel(drvdata, i, drvdata->nr_channels - 1);
                 break;
             }
         }
@@ -886,6 +990,16 @@ static int init_dma(struct hwacc_drvdata *drvdata)
             retval = -ENXIO;
             goto failed0;
         }
+
+        /* then we re-arrange channel again */
+        for (i = 0; i < drvdata->nr_channels - 1; i++) {
+            entry_index = drvdata->chan[i]->index;
+            if (entry_index != -1 && entry_index != i) {
+                /* we need to swap them as we go */
+                swap_dma_channel(drvdata, i, entry_index);
+            }
+        }
+
         of_node_put(dma_node);
         return 0;
 
@@ -935,7 +1049,8 @@ static int hwacc_probe(struct platform_device *pdev)
 {
         struct hwacc_drvdata *drvdata;
         struct resource *io;
-        int retval;
+
+        int retval, i;
 
 		DEBUG("[hwacc] probe function entry\n");
 
@@ -1033,6 +1148,13 @@ static int hwacc_probe(struct platform_device *pdev)
         platform_set_drvdata(pdev, drvdata);
         dev_set_drvdata(drvdata->pipe_dev, drvdata);
 
+        /* print out the channel order, just to be sure */
+        for (i = 0; i < drvdata->nr_channels; i++) {
+                DEBUG("[%d] dma chan id %d: irq: %d\n", i,
+                      drvdata->chan[i]->id, drvdata->chan[i]->irq);
+        }
+
+
         DEBUG("[hwacc] probe function exit\n");
 
         return(0);
@@ -1053,6 +1175,7 @@ static int hwacc_remove(struct platform_device *pdev)
 		
 		DEBUG("[hwacc] hwacc_remove entry\n");
 
+		DEBUG("[hwacc] hwacc_remove entry\n");
         /* clear each channel */
         for (i = 0; i < drvdata->nr_channels; i++) {
                 if (drvdata->chan[i])
