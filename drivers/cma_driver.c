@@ -223,10 +223,9 @@ static long dev_ioctl(struct file *filep, unsigned int cmd, unsigned long arg)
 }
 
 /*
- * @brief This implementation splits the offset field into
- * two fields:
- * 		- buffer_id : upper 16 bits
- * 		- offset	: lower 16 bits
+ * @brief This implementation puts the buffer ID in the offset field
+ * and lets the user-space helper function to apply the offset from
+ * user space
  */
 static int dev_mmap(struct file *filep, struct vm_area_struct *vma)
 {
@@ -236,10 +235,14 @@ static int dev_mmap(struct file *filep, struct vm_area_struct *vma)
 
 	DEBUG("[cmabuf]: dev_mmap entry\n");
 
-	// get buffer ID and offset
-	// buffer ID is stored in upper 16 bits of offset field
-	// offset is stored in lower 16 bits of offset field
+	// get buffer ID
+	// buffer id is stored in lower 20 bits of offset field
+	// Note: the last 12 bits of the user-supplied offset field
+	// are dropped by the kernel by the time that value gets here.
+	// that is because the kernel re-computes the offset in "pages"
 	buffer_id = vma->vm_pgoff & ((1 << 20) - 1);
+	// here offset is always 0 because user-land helper will take of
+	// actual offset
 	offset = 0;
 	req_size = vma->vm_end - vma->vm_start;
 	DEBUG("[cmabuf] vma->vm_start = 0x%lx\n", vma->vm_start);
