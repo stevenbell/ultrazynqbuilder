@@ -110,6 +110,11 @@ module_param(max_tap_count, int, 0644);
 MODULE_PARM_DESC(max_tap_count,
                 "maximum allowed tap count. increase if needed before load");
 
+/**
+ * This value makes sure there is only 1 GPIO gets set, when there is multiple hls_target
+ */
+static int has_gpio = 0;
+
 struct dma_chan {
         struct hwacc_drvdata *drvdata;
         struct device *dev;
@@ -1021,6 +1026,9 @@ static int find_set_gpio(struct hwacc_drvdata *drvdata)
         struct resource *io;
         int retval;
 
+        if (has_gpio)
+                return 0;
+
         /* we foudn the actual gpio node */
         node = of_parse_phandle(pdev->dev.of_node, "gpio", 0);;
         if (!node) {
@@ -1038,6 +1046,9 @@ static int find_set_gpio(struct hwacc_drvdata *drvdata)
          * we only need to write the 0x02 to the register
          */
         iowrite32(0x00000002, (void*)drvdata->gpio_controller);
+        
+        /* we've set GPIO */
+        has_gpio = true;
         return 0;
 
 failed:
@@ -1070,7 +1081,6 @@ static int hwacc_probe(struct platform_device *pdev)
 
         /* request and map I/O memory  for hwacc*/
         io = platform_get_resource(pdev, IORESOURCE_MEM, 0);
-        /* override the size */
         drvdata->hls_controller = devm_ioremap_resource(&pdev->dev, io);
 
         if (!drvdata->hls_controller) {
