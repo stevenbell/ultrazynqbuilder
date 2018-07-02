@@ -17,6 +17,12 @@
 typedef enum {
   CAMERA0,
   CAMERA1,
+  CAMERA2,
+  CAMERA3,
+  FLASH0,
+  FLASH1,
+  FLASH2,
+  FLASH3,
   NO_DEVICE
 } ReqDevice;
 
@@ -25,11 +31,17 @@ typedef struct {
 } CameraParams;
 
 typedef struct {
+  uint32_t duration;
+} FlashParams;
+
+typedef struct {
   ReqDevice device;
   Time time;
-  CameraParams params;
+  union{
+    CameraParams camParams;
+    FlashParams flashParams;
+  };
 } Request;
-
 
 const int QUEUE_LEN = 10;
 
@@ -75,7 +87,7 @@ int main(int argc, char* argv[])
     if(command[0] == 'q'){
       break; // Quit
     }
-    uint32_t exposure = (uint32_t)strtol(command, NULL, 10);
+    uint32_t param = (uint32_t)strtol(command, NULL, 10);
 
     uint32_t slave = metal_io_read32(io, 4); // Current slave pointer
 
@@ -89,13 +101,20 @@ int main(int argc, char* argv[])
 
     // Send a message to the R5
     Request req;
+/*
     req.device = CAMERA0;
-    req.params.exposure = exposure;
+    req.camParams.exposure = param;
     req.time = ttc_clock_now() + 5e5; // 500ms from now
     printf("\nRequesting exposure %d at time %ld\n", req.params.exposure, req.time);
+*/
+    req.device = FLASH0;
+    req.flashParams.duration = param;
+    req.time = ttc_clock_now() + 5e5; // 500ms from now
+    printf("\nRequesting %d us long flash at time %ld\n", req.flashParams.duration, req.time);
 
     metal_io_block_write(io, 0x08 + master*(sizeof(Request)), &req, sizeof(Request));
 
+/*
     // HACK: make the same request on the other camera
     master = (master + 1) % QUEUE_LEN;
     if(master == slave){
@@ -105,6 +124,7 @@ int main(int argc, char* argv[])
     req.device = CAMERA1;
     metal_io_block_write(io, 0x08 + master*(sizeof(Request)), &req, sizeof(Request));
     // END HACK
+*/
 
     metal_io_write32(io, 0, master); // Update the master count
   }
