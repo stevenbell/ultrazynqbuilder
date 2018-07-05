@@ -412,7 +412,7 @@ void write_tap_values(struct hwacc_drvdata *drvdata, UBuffer *buf, void *tap)
                 return;
         }
 
-        for (i = 0; i < data_size; i++) {
+        for (i = 0; i < buf->width; i++) {
                 uint32_t value;
                 switch (buf->depth) {
                         case 1: {
@@ -724,6 +724,7 @@ long dev_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
                         pend_processed(drvdata, arg);
                         return 0;
                 default:
+                        DEBUG("Unknown cmd\n");
                         retval = -EINVAL; /* unknown command, return an error */
                         goto failed;
         }
