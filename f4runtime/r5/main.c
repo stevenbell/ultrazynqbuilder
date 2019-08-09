@@ -14,6 +14,7 @@
 #include "ttc_clock.h"
 #include "mpu9250.h"
 #include "imx219_cam.h"
+#include "pmod_flash.h"
 #include "requestqueue.h"
 
 const u32 GPIO_LEDS = XPAR_AXI_GPIO_0_BASEADDR;
@@ -31,7 +32,7 @@ int main()
   init_platform(); // Interrupts and such
 
   // Blink for 5 seconds
-  for(int i = 0; i < 20; i++){
+  for(int i = 0; i < 10; i++){
     *leds = 0xaa;
     usleep(100000);
     *leds = 0x55;
@@ -64,8 +65,37 @@ int main()
   imx219_cam_run(&cam1);
 
   // HACK: Start the HLS demosaicker
-  uint32_t* demosaic = (uint32_t*)XPAR_DEMOSAIC0_S_AXI_CONFIG_BASEADDR;
-  *demosaic = 0x81; // Start, auto-restart
+  uint32_t* demosaic0 = (uint32_t*)XPAR_DEMOSAIC0_S_AXI_CONFIG_BASEADDR;
+  demosaic0[0] = 0x81; // Start, auto-restart
+
+//  int16_t ccm[12] = { 563, -107, 20, -10142, -96, 385, 19, -6982, -27, -234, 773, -5408};
+//  for(int i = 0; i < 12; i++){
+//    demosaic0[2*i + 4] = ccm[i];
+//  }
+//
+//  demosaic0[28] = 0x0; // Phase = 0b00
+
+  uint32_t* demosaic1 = (uint32_t*)XPAR_DEMOSAIC1_S_AXI_CONFIG_BASEADDR;
+  demosaic1[0] = 0x81;
+
+  pmod_flash_config flash0 = {
+    .reqId = FLASH0,
+    .pin = 0,
+  };
+  pmod_flash_init(&flash0);
+
+  pmod_flash_config flash1 = {
+    .reqId = FLASH1,
+    .pin = 1,
+  };
+  pmod_flash_init(&flash1);
+
+  pmod_flash_config flash2 = {
+    .reqId = FLASH2,
+    .pin = 3, // Next to the previous two on PMOD, but non-sequential GPIO number
+  };
+  pmod_flash_init(&flash2);
+
 
   // Main loop
   Time last_cam_time[2] = {0, 0}; // Last time when we received a frame
@@ -84,6 +114,11 @@ int main()
       last_cam_time[1] = cam1.finished_time;
       imx219_handle_requests(&cam1);
      }
+
+    pmod_flash_handle_requests(&flash0);
+    pmod_flash_handle_requests(&flash1);
+    pmod_flash_handle_requests(&flash2);
+
   }
 
 #ifdef USING_AMP

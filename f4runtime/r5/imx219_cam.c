@@ -35,19 +35,6 @@ s32 read_registers(u16 address, u8 nregs, u8 registers[])
 	return XST_SUCCESS;
 }
 
-/* Set the focus position of the lens
- * @param raw_value: a 10-bit number which translates to the lens position
- */
-void set_focus(u16 raw_value)
-{
-  // VCM controller has only two configuration bytes
-  // [ Power down | FLAG | data (10 bits) | slope control (2 bits) | step period (2 bits) ]
-  u8 control[2];
-  control[0] = (raw_value >> 4) & 0x3F; // Leave PD and FLAG as 0, write 6/10 bits
-  control[1] = (raw_value << 4) & 0xF0; // Bottom 4/10 bits, leave control bits 0
-  i2c_write(I2C_FOCUS_ADDR, control, 2);
-}
-
 void csi_irq_handler(void* val)
 {
   IMX219_Config* cam = (IMX219_Config*)val;
@@ -65,7 +52,7 @@ void imx219_cam_init(IMX219_Config* config)
   config->inflight_isdummy[0] = config->inflight_isdummy[1] = true;
 
   // Set up the CSI receiver
-  *(u32*)(config->baseaddr) |= CSIRX_CFG_OUTPUT_DISABLE;
+  // Leave output disabled for now
   *(u32*)(config->baseaddr + 0x10) = 1232; // Coming off the image sensor TODO: make configurable
 
   // Set up the receive interrupt handler
@@ -90,6 +77,8 @@ void imx219_cam_init(IMX219_Config* config)
     int tx_len = tx_bytes[0]; // First byte is the length
     XIic_Send(I2C_BASEADDR, I2C_CAM_ADDR, tx_bytes+1, tx_len, XIIC_STOP);
   }
+
+  imx219_cam_set_gain(config, 10); // HACK
 }
 
 /* Sets the CSI receiver to capture frames */
@@ -112,6 +101,38 @@ void imx219_cam_set_exposure(IMX219_Config* config, u16 lines){
   XIic_Send(IIC_BASEADDR, I2C_CAM_ADDR, regvals, 4, XIIC_STOP);
 }
 
+// Set the gain value between x1 and x160 (16000 ISO)
+void imx219_cam_set_gain(IMX219_Config* config, float gain)
+{
+  // Use as much analog gain as possible, then use digital to make up the difference
+  float analog_gain;
+  if(gain < 10.667){
+    analog_gain = gain;
+  }
+  else{
+    analog_gain = 10.667;
+  }
+
+  // Analog gain = 256 / (256 - x), where X has a max value of 232 (gain of 10.6 ~= 20dB)
+  // X = 256 - (256 / gain)
+  u8 x = 256.5f - (256.0f / analog_gain); // Plus 0.5 for rounding
+  float true_analog_gain = 256.0f / (256.0f - x);
+
+  u16 digital_gain = gain / true_analog_gain * 256;
+  u8 upper = (digital_gain >> 8) & 0x0f; // Only 4 bits for integer part
+  u8 lower = digital_gain & 0xff;
+
+  // Set all the gains at once
+  // 0x157 [analog gain] [digital upper] [digital lower]
+  uint8_t regvals[5] = {0x01,0x57, x, upper, lower};
+
+  printf("gain: %f  analog: %f  digital: %u\n", gain, true_analog_gain, digital_gain);
+  printf("set gain: %d %d %d\n", x, upper, lower);
+
+  i2c_set_mux(config->i2c_channel);
+  XIic_Send(IIC_BASEADDR, I2C_CAM_ADDR, regvals, 5, XIIC_STOP);
+}
+
 Time imx219_min_frame_time(IMX219_Config* config)
 {
   Time t = 33327;
@@ -121,12 +142,13 @@ Time imx219_min_frame_time(IMX219_Config* config)
 void imx219_handle_requests(IMX219_Config* config)
 {
   if(!config->inflight_isdummy[0]){
-    printf("[cam %d] received frame at %llu (scheduled at %llu,  %+lld)\n", config->i2c_channel,
-         config->finished_time, config->inflight_sof[0], ttc_clock_diff(config->finished_time, config->inflight_sof[0]));
+//   printf("[cam %d] received frame at %llu (scheduled at %llu,  %+lld)\n", config->i2c_channel,
+//         config->finished_time, config->inflight_sof[0], ttc_clock_diff(config->finished_time, config->inflight_sof[0]));
+    printf("%llu\n", config->finished_time);
   }
   else{
-    printf("[cam %d] rx dummy at %llu (expected at %llu,  %+lld)\n", config->i2c_channel,
-         config->finished_time, config->inflight_sof[0], ttc_clock_diff(config->finished_time, config->inflight_sof[0]));
+//    printf("[cam %d] rx dummy at %llu (expected at %llu,  %+lld)\n", config->i2c_channel,
+//         config->finished_time, config->inflight_sof[0], ttc_clock_diff(config->finished_time, config->inflight_sof[0]));
   }
 
   // We just began to receive frame N; frame N+1 is already locked in (and
@@ -142,10 +164,10 @@ void imx219_handle_requests(IMX219_Config* config)
 
     // Time in the request is the beginning of the exposure; calculate the
     // SOF time, which is what we can actually track.
-    Time sof_target = req.time + req.params.exposure + IMX219_BLANKING;
+    Time sof_target = req.time + req.camParams.exposure; // TODO: tune this more precisely
 
     // Time from SOF of previous frame to SOF of this request
-    Time interframe = req.params.exposure + IMX219_BLANKING;
+    Time interframe = req.camParams.exposure + IMX219_BLANKING;
     if(interframe < imx219_min_frame_time(config)){
       interframe = imx219_min_frame_time(config);
     }
@@ -160,21 +182,23 @@ void imx219_handle_requests(IMX219_Config* config)
     // we put in another dummy frame, but it is safer to schedule ASAP and
     // not push the schedule later, possibly bumping other things.
     if(slack < (s64)imx219_min_frame_time(config)){
-      exposure_lines = req.params.exposure / 18.90;
+      exposure_lines = req.camParams.exposure / IMX219_LINETIME;
       if(exposure_lines < 1){
         exposure_lines = 1;
       }
       isDummy = false;
       requestqueue_pop(config->reqId); // We're done with this Request
+
+      printf("%lld,", sof_target);
     }
 
     // If we can insert more than one dummy frame (slack > 2*min_frame_time),
     // then insert a minimal dummy frame.
     // Otherwise, calculate the required dummy frame exposure and insert it.
     else if(slack < 2*imx219_min_frame_time(config)){
-      exposure_lines = (slack - IMX219_BLANKING) / 18.90;
+      exposure_lines = (slack - IMX219_BLANKING) / IMX219_LINETIME + 0.5f; // + 1/2 line for rounding
     }
-    printf("[cam %d] sof target: %lld, slack: %lld  lines: %lu  dummy: %u\n", config->i2c_channel, sof_target, slack, exposure_lines, isDummy);
+//    printf("[cam %d] sof target: %lld, slack: %lld  lines: %lu  dummy: %u\n", config->i2c_channel, sof_target, slack, exposure_lines, isDummy);
   } // END if(camera has a request)
 
   // Configure the camera and CSI receiver with the calculated parameters
@@ -185,8 +209,8 @@ void imx219_handle_requests(IMX219_Config* config)
   config->inflight_duration[0] = config->inflight_duration[1];
   config->inflight_isdummy[0] = config->inflight_isdummy[1];
 
-  if(exposure_lines > 1763){ // TODO: don't hardcode this
-    config->inflight_duration[1] = (exposure_lines * 18.90) + 90;
+  if(exposure_lines > 1759){ // (imx219_min_frame_time - IMX219_BLANKING) / IMX219_LINETIME
+    config->inflight_duration[1] = (exposure_lines * IMX219_LINETIME) + IMX219_BLANKING;
   }
   else{
     config->inflight_duration[1] = imx219_min_frame_time(config);
@@ -196,10 +220,10 @@ void imx219_handle_requests(IMX219_Config* config)
 
   // CSI receiver has be configured for frame N+1, not N+2
   if(config->inflight_isdummy[0]){
-    *(u32*)(config->baseaddr) |= CSIRX_CFG_OUTPUT_DISABLE;
+    *(u32*)(config->baseaddr) &= ~(CSIRX_CFG_OUTPUT_ENABLE); // Disable output (clear "enable" bit)
   }
   else{
-    *(u32*)(config->baseaddr) &= ~(CSIRX_CFG_OUTPUT_DISABLE); // Enable output (clear "disable" bit)
+    *(u32*)(config->baseaddr) |= CSIRX_CFG_OUTPUT_ENABLE;
   }
 
   // Grab the next frame from the CSI (frame N+1)

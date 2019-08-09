@@ -9,7 +9,6 @@
 #include <stdbool.h>
 
 #define I2C_CAM_ADDR 0x10
-#define I2C_FOCUS_ADDR 0x0c
 
 /* CSIRX register map:
  * 0x00: Config register (not to be confused with control register)
@@ -28,7 +27,7 @@
 #define CSIRX_CFG_ENABLE_INTERRUPTS 0x02
 #define CSIRX_CFG_ENABLE_SOF_IRQ    0x04
 #define CSIRX_CFG_ENABLE_EOF_IRQ    0x08
-#define CSIRX_CFG_OUTPUT_DISABLE    0x10
+#define CSIRX_CFG_OUTPUT_ENABLE     0x10
 
 // Atomic register flags
 #define CSIRX_CTRL_RUN         0x01
@@ -51,12 +50,13 @@ typedef struct {
 
 // Blanking time in microseconds
 // This is actually a function of the image settings
-#define IMX219_BLANKING 80
+#define IMX219_BLANKING 76
+#define IMX219_LINETIME 18.903 // microseconds
 
-void set_focus(u16 raw_value);
 void imx219_cam_init(IMX219_Config* config);
 void imx219_cam_run(IMX219_Config* config);
 void imx219_cam_set_exposure(IMX219_Config* config, u16 lines);
+void imx219_cam_set_gain(IMX219_Config* config, float gain);
 Time imx219_min_frame_time(IMX219_Config* config);
 void imx219_handle_requests(IMX219_Config* config);
 

@@ -76,9 +76,10 @@ void masterqueue_init(void)
     print("Failed to get I/O region\n");
   }
 
-  // Initialize to current master pointer
-  mq_slave_head = metal_io_read32(io, 0);
-
+  // Initialize our current pointer
+  // Since we're running before the master starts, we just set ourselves to zero
+  mq_slave_head = 0;
+  metal_io_write32(io, 4, mq_slave_head); // Our slave count
 }
 
 void masterqueue_close(void)
@@ -105,7 +106,7 @@ void masterqueue_check(void)
     Request req;
     int ok = metal_io_block_read(io, 0x08 + mq_slave_head*sizeof(Request), &req, sizeof(Request));
     if(ok){
-      printf("received request %lu, passing it to the queue\n", mq_slave_head);
+      //printf("received request %lu, for time %lld\n", mq_slave_head, req.time);
       requestqueue_push(req.device, req);
     }
   }

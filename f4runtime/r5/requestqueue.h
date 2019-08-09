@@ -20,7 +20,17 @@
 typedef enum {
   CAMERA0,
   CAMERA1,
-  NO_DEVICE
+  CAMERA2,
+  CAMERA3,
+  FLASH0,
+  FLASH1,
+  FLASH2,
+  FLASH3,
+  LENS0,
+  LENS1,
+  LENS2,
+  LENS3,
+ NO_DEVICE
 } ReqDevice;
 
 typedef struct {
@@ -28,9 +38,21 @@ typedef struct {
 } CameraParams;
 
 typedef struct {
+  u32 duration;
+} FlashParams;
+
+typedef struct {
+  u32 position;
+} LensParams;
+
+typedef struct {
   ReqDevice device;
   Time time;
-  CameraParams params;
+  union{
+    CameraParams camParams;
+    FlashParams flashParams;
+    LensParams lensParams;
+  };
 } Request;
 
 // Linked list node used to create a time-ordered queue of requests
