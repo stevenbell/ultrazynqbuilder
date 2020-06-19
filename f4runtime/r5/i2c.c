@@ -4,7 +4,10 @@
 
 #include "i2c.h"
 
-
+int i2c_init(void)
+{
+  // No initialization required for low-level access
+}
 
 unsigned int i2c_write(u8 addr, u8 data[], unsigned int len)
 {

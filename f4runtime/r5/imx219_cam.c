@@ -60,22 +60,25 @@ void imx219_cam_init(IMX219_Config* config)
 
   // Set up the camera clock
   i2c_set_mux(config->i2c_channel);
-  si514_init();
+  // TODO: use a flag to determine whether we do this (our boards) or not (RasPi cameras)
+  //si514_init();
 
   // Now write the camera registers
+/* TODO: put these back, although I don't think they matter.
   u8 result[2];
   read_registers(0x0000, 2, result); // ID (should be 0x0219)
   usleep(1000);
 
   read_registers(0x0002, 1, result); // Who knows??
   usleep(1000);
+*/
 
   // Set all the configuration registers
   // The sequence is terminated with an arry of all zeros
   for(int i = 0; byte_strings[i][0] > 0; i++){
     uint8_t* tx_bytes = byte_strings[i];
     int tx_len = tx_bytes[0]; // First byte is the length
-    XIic_Send(I2C_BASEADDR, I2C_CAM_ADDR, tx_bytes+1, tx_len, XIIC_STOP);
+    i2c_write(I2C_CAM_ADDR, tx_bytes+1, tx_len);
   }
 
   imx219_cam_set_gain(config, 10); // HACK
@@ -98,7 +101,7 @@ void imx219_cam_set_exposure(IMX219_Config* config, u16 lines){
   regvals[3] = lines & 0xff;
 
   i2c_set_mux(config->i2c_channel);
-  XIic_Send(IIC_BASEADDR, I2C_CAM_ADDR, regvals, 4, XIIC_STOP);
+  i2c_write(I2C_CAM_ADDR, regvals, 4);
 }
 
 // Set the gain value between x1 and x160 (16000 ISO)
@@ -130,7 +133,7 @@ void imx219_cam_set_gain(IMX219_Config* config, float gain)
   printf("set gain: %d %d %d\n", x, upper, lower);
 
   i2c_set_mux(config->i2c_channel);
-  XIic_Send(IIC_BASEADDR, I2C_CAM_ADDR, regvals, 5, XIIC_STOP);
+  i2c_write(I2C_CAM_ADDR, regvals, 5);
 }
 
 Time imx219_min_frame_time(IMX219_Config* config)
