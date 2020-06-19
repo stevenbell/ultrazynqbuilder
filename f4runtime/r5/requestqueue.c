@@ -77,7 +77,8 @@ void masterqueue_init(void)
   }
 
   // Initialize our current pointer
-  // Since we're running before the master starts, we just set ourselves to zero
+  // Since we're running before the master starts, set everything to zero
+  metal_io_write32(io, 0, 0); // Master count
   mq_slave_head = 0;
   metal_io_write32(io, 4, mq_slave_head); // Our slave count
 }
