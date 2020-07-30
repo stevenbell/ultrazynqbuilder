@@ -10,6 +10,7 @@
 #include "imx219_cam.h"
 #include "initcommands.h"
 
+//#define VERBOSE 1
 
 s32 read_registers(u16 address, u8 nregs, u8 registers[])
 {
@@ -144,16 +145,18 @@ Time imx219_min_frame_time(IMX219_Config* config)
 
 void imx219_handle_requests(IMX219_Config* config)
 {
+#ifdef VERBOSE
   if(!config->inflight_isdummy[0]){
-//   printf("[cam %d] received frame at %llu (scheduled at %llu,  %+lld)\n", config->i2c_channel,
-//         config->finished_time, config->inflight_sof[0], ttc_clock_diff(config->finished_time, config->inflight_sof[0]));
-    printf("%llu\n", config->finished_time);
+   printf("[cam %d] received frame at %llu (scheduled at %llu,  %+lld)\n", config->i2c_channel,
+         config->finished_time, config->inflight_sof[0], ttc_clock_diff(config->finished_time, config->inflight_sof[0]));
+//    printf("%llu\n", config->finished_time);
   }
   else{
-//    printf("[cam %d] rx dummy at %llu (expected at %llu,  %+lld)\n", config->i2c_channel,
-//         config->finished_time, config->inflight_sof[0], ttc_clock_diff(config->finished_time, config->inflight_sof[0]));
+/* For timestamping purposes: */
+    printf("[cam %d] rx dummy at %llu (expected at %llu,  %+lld)\n", config->i2c_channel,
+         config->finished_time, config->inflight_sof[0], ttc_clock_diff(config->finished_time, config->inflight_sof[0]));
   }
-
+#endif
   // We just began to receive frame N; frame N+1 is already locked in (and
   // possibly exposing), so we'll be setting frame N+2.
 
