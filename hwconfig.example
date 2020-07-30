@@ -18,7 +18,7 @@ hw:
   path: /nobackup/sebell/work/ultrazed/ip_repo/xilinx_com_hls_hls_target_1_0/
   outputto: dma0
 
-# The IO pin locations must be specified for the CSI board
+# The IO pin locations must be specified for the CSI board, with the I2C number
 # Valid combinations are:
 # AB6 / AD8 / AE7
 # AD4 / AD1 / AE4

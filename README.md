@@ -34,3 +34,6 @@ The design will be created, and Vivado should produce a bitstream.  From here yo
 It will setup a Ubuntu file system, including its package repositories.
 1. Modify `build_rootfs.sh` so that `TARGET` is pointing to the device's root partition
 2. Run `build_rootfs.sh` with root privilege. Because it uses `chroot`, during the execution anything like <kbd>CTRL</kbd> + <kbd>C</kbd> will have unexpected results. You can use a virtual machine if that's the concern.
+
+3. Copy libraries to the Ubuntu root filesystem.  The easiest way to do this is to extract the PetaLinux-built root filesystem and copy the entire `/lib/modules/` directory.
+
