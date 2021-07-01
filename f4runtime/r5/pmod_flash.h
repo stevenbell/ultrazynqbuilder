@@ -19,7 +19,7 @@
 
 typedef struct
 {
-  ReqDevice reqId;
+  ZynqDevice reqId;
   u8 pin;
   bool isOn;
   Time offTime; // If we're on, when to turn off

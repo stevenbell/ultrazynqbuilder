@@ -12,53 +12,13 @@
 
 #include "ttc_clock.h"
 #include "xil_types.h"
+#include "mailbox.h"
 
-#define QUEUE_LEN 10
-
-// WARNING: the byte size of an enum is not defined by the C standard, and may
-// differ across platforms.
-typedef enum {
-  CAMERA0,
-  CAMERA1,
-  CAMERA2,
-  CAMERA3,
-  FLASH0,
-  FLASH1,
-  FLASH2,
-  FLASH3,
-  LENS0,
-  LENS1,
-  LENS2,
-  LENS3,
- NO_DEVICE
-} ReqDevice;
-
-typedef struct {
-  u32 exposure;
-} CameraParams;
-
-typedef struct {
-  u32 duration;
-} FlashParams;
-
-typedef struct {
-  u32 position;
-} LensParams;
-
-typedef struct {
-  ReqDevice device;
-  Time time;
-  union{
-    CameraParams camParams;
-    FlashParams flashParams;
-    LensParams lensParams;
-  };
-} Request;
 
 // Linked list node used to create a time-ordered queue of requests
 typedef struct rq RequestQ;
 struct rq {
-  Request req;
+  ZynqRequest req;
   RequestQ* next;
 };
 
@@ -66,9 +26,10 @@ struct rq {
 void masterqueue_init(void);
 void masterqueue_close(void);
 void masterqueue_check(void);
+void masterqueue_push(const ZynqRequest* req);
 
-void requestqueue_push(ReqDevice dev, Request req);
-Request requestqueue_peek(ReqDevice dev);
-Request requestqueue_pop(ReqDevice dev);
+void requestqueue_push(ZynqDevice dev, ZynqRequest req);
+ZynqRequest requestqueue_peek(ZynqDevice dev);
+ZynqRequest requestqueue_pop(ZynqDevice dev);
 
 #endif /* REQUESTQUEUE_H */

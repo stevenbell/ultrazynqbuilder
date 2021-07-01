@@ -20,7 +20,7 @@ void dw9174_set_focus(DW9174_Config* config, u16 raw_value)
 
 void dw9174_handle_requests(DW9174_Config* config)
 {
-  Request req = requestqueue_peek(config->reqId);
+  ZynqRequest req = requestqueue_peek(config->reqId);
   if(req.device != NO_DEVICE && req.time <= ttc_clock_now()){ // TODO: + slack
     printf("move lens %d on at %lld\n", config->i2c_channel, ttc_clock_now());
     requestqueue_pop(config->reqId);

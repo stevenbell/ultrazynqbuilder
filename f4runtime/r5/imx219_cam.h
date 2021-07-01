@@ -36,7 +36,7 @@
 #define CSIRX_CTRL_ACK_EOF_IRQ 0x08
 
 typedef struct {
-  ReqDevice reqId;
+  ZynqDevice reqId;
   unsigned int i2c_channel; // I2C mux channel, (0-3)
   u32 baseaddr; // CSI receiver base address
   unsigned int irq; // CSI receiver IRQ

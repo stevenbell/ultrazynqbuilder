@@ -10,7 +10,7 @@
 #define I2C_FOCUS_ADDR 0x0c
 
 typedef struct {
-  ReqDevice reqId;
+  ZynqDevice reqId;
   unsigned int i2c_channel; // I2C mux channel, (0-3)
 } DW9174_Config;
 

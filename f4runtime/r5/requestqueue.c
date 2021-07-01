@@ -27,7 +27,8 @@
 // TODO: move these into their own instance struct so they aren't global?
 struct metal_device* shm_dev;
 struct metal_io_region *io = NULL;
-u32 mq_slave_head;
+u32 mq_a2r_tail;
+u32 mq_r2a_head;
 
 const metal_phys_addr_t phys_bases[1] = {SHM_BASE_ADDR};
 
@@ -77,10 +78,15 @@ void masterqueue_init(void)
   }
 
   // Initialize our current pointer
-  // Since we're running before the master starts, set everything to zero
-  metal_io_write32(io, 0, 0); // Master count
-  mq_slave_head = 0;
-  metal_io_write32(io, 4, mq_slave_head); // Our slave count
+  // Since we're running before the APU starts, set everything to zero
+  metal_io_write32(io, A2R_HEAD, 0); // APU count
+  mq_a2r_tail = 0;
+  metal_io_write32(io, A2R_TAIL, mq_a2r_tail); // Our count (RPU)
+
+  mq_r2a_head = 0;
+  metal_io_write32(io, R2A_HEAD, mq_r2a_head); // Our count (RPU)
+  metal_io_write32(io, R2A_TAIL, 0); // APU count
+
 }
 
 void masterqueue_close(void)
@@ -90,37 +96,66 @@ void masterqueue_close(void)
 }
 
 /* layout:
- * 0x00: master pointer
- * 0x04: slave pointer
- * 0x08: buffers
+ * 0x00: APU pointer
+ * 0x04: RPU pointer
+ * 0x08: APU->RPU buffers
+ * ...
+ * QUEUE_LEN + 0x08 : APU pointer
+ * QUEUE_LEN + 0x0c : RPU pointer
+ * QUEUE_LEN + 0x10 : RPU->APU buffers
  */
 void masterqueue_check(void)
 {
-  // If the master pointer is ahead of the slave pointer, then we have data to read
-  // Because of wraparound, any inequality means we're behind.
-  u32 master = metal_io_read32(io, 0);
-  while(mq_slave_head != master){
-    // Increment the slave pointer (currently points to the last *processed*)
-    mq_slave_head = (mq_slave_head + 1) % QUEUE_LEN;
+  // If the APU pointer (head) is ahead of the RPU pointer (tail), then we have
+  // data to read. Because of wraparound, any inequality means we're behind.
+  u32 head = metal_io_read32(io, A2R_HEAD);
+  while(mq_a2r_tail != head){
+    // Increment the RPU pointer (currently points to the last *processed*)
+    mq_a2r_tail = (mq_a2r_tail + 1) % QUEUE_LEN;
 
     // Read the next request
-    Request req;
-    int ok = metal_io_block_read(io, 0x08 + mq_slave_head*sizeof(Request), &req, sizeof(Request));
+    ZynqRequest req;
+    int ok = metal_io_block_read(io, A2R_BUFFER_BASE + mq_a2r_tail*sizeof(ZynqRequest), &req, sizeof(ZynqRequest));
     if(ok){
-      //printf("received request %lu, for time %lld\n", mq_slave_head, req.time);
+      printf("received request %lu on dev %lu, for time %lld\n", mq_a2r_tail, req.device, req.time);
       requestqueue_push(req.device, req);
     }
   }
-  metal_io_write32(io, 4, mq_slave_head);
+  metal_io_write32(io, A2R_TAIL, mq_a2r_tail); // TODO: only do this when we updated mq_a2r_tail
+}
+
+void masterqueue_push(const ZynqRequest* req)
+{
+  printf("mq push: %d at %lld\n", req->reqId, req->time);
+
+  uint32_t tail = metal_io_read32(io, R2A_TAIL); // Where the APU currently is
+
+  // Move to the next slot, and check that we're not going to overflow the ring buffer
+  mq_r2a_head = (mq_r2a_head + 1) % QUEUE_LEN;
+  if(mq_r2a_head == tail){
+    printf("R2A message queue is full!\n");
+    return; // Drop it on the floor
+  }
+
+  // Write the request
+  metal_io_block_write(io, R2A_BUFFER_BASE + mq_r2a_head*(sizeof(ZynqRequest)), req, sizeof(ZynqRequest));
+
+  // Update the head count
+  metal_io_write32(io, R2A_HEAD, mq_r2a_head);
 }
 
 RequestQ* queues[NO_DEVICE]; // Assumes sequential enum numbering
 
-void requestqueue_push(ReqDevice dev, Request req)
+void requestqueue_push(ZynqDevice dev, ZynqRequest req)
 {
   // Allocate a new RequestQ node to hold this Request
   RequestQ* node = calloc(1, sizeof(RequestQ));
   node->req = req;
+
+  if(dev >= NO_DEVICE){
+    printf("Unknown device %ld\n", dev);
+    return;
+  }
 
   // Do a sequential search through the queue
   RequestQ** nodeptr = &(queues[dev]);
@@ -140,23 +175,23 @@ void requestqueue_push(ReqDevice dev, Request req)
 
 
 /* Returns the request at the head of the queue without removing it. */
-Request requestqueue_peek(ReqDevice dev)
+ZynqRequest requestqueue_peek(ZynqDevice dev)
 {
   // If the queue is not empty, return the first node
   if(queues[dev] != NULL){
     return queues[dev]->req;
   }
   else{ // If it is empty, return an empty struct with device set to NO_DEVICE
-    Request empty = {0};
+    ZynqRequest empty = {0};
     empty.device = NO_DEVICE;
     return empty;
   }
 }
 
 /* Removes the request at the head of the queue and returns it. */
-Request requestqueue_pop(ReqDevice dev)
+ZynqRequest requestqueue_pop(ZynqDevice dev)
 {
-  Request result;
+  ZynqRequest result;
   // If the queue is not empty, remove the first node and return it
   if(queues[dev] != NULL){
     result = queues[dev]->req; // Copy the request to return
@@ -165,7 +200,7 @@ Request requestqueue_pop(ReqDevice dev)
     free(head); // Now delete the head
   }
   else{ // If it is empty, return an empty struct with device set to NO_DEVICE
-    bzero(&result, sizeof(Request));
+    bzero(&result, sizeof(ZynqRequest));
     result.device = NO_DEVICE;
   }
 

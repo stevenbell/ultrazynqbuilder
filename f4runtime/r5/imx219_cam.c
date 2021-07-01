@@ -165,7 +165,7 @@ void imx219_handle_requests(IMX219_Config* config)
   bool isDummy = true; // Whether this is a dummy (hidden) frame
 
   // Look at the next request
-  Request req = requestqueue_peek(config->reqId);
+  ZynqRequest req = requestqueue_peek(config->reqId);
   if(req.device != NO_DEVICE){
 
     // Time in the request is the beginning of the exposure; calculate the

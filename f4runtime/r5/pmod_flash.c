@@ -30,7 +30,7 @@ void pmod_flash_handle_requests(pmod_flash_config* config)
     }
   }
   else{ // Off, see if there is a request we need to service
-    Request req = requestqueue_peek(config->reqId);
+    ZynqRequest req = requestqueue_peek(config->reqId);
     if(req.device != NO_DEVICE && req.time <= ttc_clock_now()){ // TODO: + slack
       // If the next request is now (or really soon), execute it
       u32* data = (u32*)PMOD_DATA_REG;
