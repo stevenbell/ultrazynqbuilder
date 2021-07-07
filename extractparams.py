@@ -6,6 +6,10 @@ import yaml
 from lxml import etree
 #from IPython import embed
 
+def is_power2(num):
+    return num != 0 and ((num & (num - 1)) == 0)
+
+
 inpath = 'hwconfig.user'
 outpath = 'hwconfig.all'
 
@@ -96,6 +100,44 @@ for module in params["hw"]:
                 out_connected = True
                 break
         module["out_connected"] = out_connected
+
+# fourth pass to properly setup dma width
+for module in params["hw"]:
+    if module["type"] == "dma":
+        # search connected hls module to see its depth
+        for m in params["hw"]:
+            if m["type"] == "hls" and "outputto" in m and \
+                    m["outputto"] == module["name"]:
+                # find the output stream
+                s = None
+                for stream in m["streams"]:
+                    if stream["type"] == "output":
+                        s = stream
+                        break
+                if s is None:
+                    raise Exception("no output found in " + m["name"])
+                depth = s["depth"]
+                if not is_power2(depth):
+                    depth = 2
+                module["s2mm_width"] = depth * 8
+
+            out_args = module["outputto"].split(".")
+            module_name = out_args[0]
+            stream_name = out_args[1]
+            if m["name"] == module_name:
+                for stream in m["streams"]:
+                    if stream["name"] == stream_name:
+                        s = stream
+                        break
+                depth = s["depth"]
+                if not is_power2(depth):
+                    depth = 2
+                module["mm2s_width"] = depth * 8
+        # sanity check
+        if (module["out_connected"] and "s2mm_width" not in module) or \
+                ("mm2s_width" not in module):
+            print(module)
+            raise Exception("corrupted hwconfig file")
 
 outfile = open(outpath, 'w')
 outfile.write(yaml.dump(params))
