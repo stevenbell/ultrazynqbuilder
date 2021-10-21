@@ -46,6 +46,7 @@ typedef struct {
   Time inflight_sof[2]; // When we expect to receive the frames in flight
   Time inflight_duration[2]; // Expected duration (sof to sof) of frames in flight
   bool inflight_isdummy[2];
+  ZynqRequest inflight_request[2];
 } IMX219_Config;
 
 // Blanking time in microseconds

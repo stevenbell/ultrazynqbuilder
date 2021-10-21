@@ -4,9 +4,14 @@
 
 #include "i2c.h"
 
-int i2c_init(void)
+unsigned int i2c_init(void)
 {
   // No initialization required for low-level access
+}
+
+unsigned int i2c_check(void)
+{
+  // No babysitting required for low-level access; the operations are blocking
 }
 
 unsigned int i2c_write(u8 addr, u8 data[], unsigned int len)

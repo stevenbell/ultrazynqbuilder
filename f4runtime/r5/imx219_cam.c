@@ -143,20 +143,23 @@ Time imx219_min_frame_time(IMX219_Config* config)
   return t;
 }
 
+// This function is called each time we have a new frame
 void imx219_handle_requests(IMX219_Config* config)
 {
-#ifdef VERBOSE
+
   if(!config->inflight_isdummy[0]){
-   printf("[cam %d] received frame at %llu (scheduled at %llu,  %+lld)\n", config->i2c_channel,
+    // Pass the information on the received frame back to the host
+    config->inflight_request[0].time = config->finished_time; // TODO: calculate SoF time here
+    masterqueue_push(config->inflight_request);
+#ifdef VERBOSE
+    printf("[cam %d] received frame at %llu (scheduled at %llu,  %+lld)\n", config->i2c_channel,
          config->finished_time, config->inflight_sof[0], ttc_clock_diff(config->finished_time, config->inflight_sof[0]));
-//    printf("%llu\n", config->finished_time);
   }
   else{
-/* For timestamping purposes: */
     printf("[cam %d] rx dummy at %llu (expected at %llu,  %+lld)\n", config->i2c_channel,
          config->finished_time, config->inflight_sof[0], ttc_clock_diff(config->finished_time, config->inflight_sof[0]));
-  }
 #endif
+  }
   // We just began to receive frame N; frame N+1 is already locked in (and
   // possibly exposing), so we'll be setting frame N+2.
 
@@ -214,6 +217,7 @@ void imx219_handle_requests(IMX219_Config* config)
   config->inflight_sof[0] = config->inflight_sof[1];
   config->inflight_duration[0] = config->inflight_duration[1];
   config->inflight_isdummy[0] = config->inflight_isdummy[1];
+  config->inflight_request[0] = config->inflight_request[1];
 
   if(exposure_lines > 1759){ // (imx219_min_frame_time - IMX219_BLANKING) / IMX219_LINETIME
     config->inflight_duration[1] = (exposure_lines * IMX219_LINETIME) + IMX219_BLANKING;
@@ -231,6 +235,9 @@ void imx219_handle_requests(IMX219_Config* config)
   else{
     *(u32*)(config->baseaddr) |= CSIRX_CFG_OUTPUT_ENABLE;
   }
+
+  // TODO: set the request parameters based on what was actually achieved
+  config->inflight_request[1] = req;
 
   // Grab the next frame from the CSI (frame N+1)
   // Frame N+1 had its settings locked in a while ago, and is exposing

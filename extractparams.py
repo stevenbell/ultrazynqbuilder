@@ -39,6 +39,7 @@ for module in params['hw']:
   for iface in ifaces:
     stream = {}
     stream['name'] = str(iface.xpath('spirit:name/text()', namespaces=ns)[0])
+    print("  Parsing stream: '{}'".format(stream['name']))
     if len(iface.xpath('spirit:master', namespaces=ns)) is not 0:
       stream['type'] = 'output'
     elif len(iface.xpath('spirit:slave', namespaces=ns)) is not 0:
@@ -70,8 +71,10 @@ for module in params["hw"]:
       elif "." in dma["outputto"] and dma["outputto"].split(".")[0] == module["name"]:
         specified_dmas.append(dma)
       else:
-        print("[Warning] Mismatched channel name. Expect module name", module["name"],
-              "got", dma["outputto"])
+        pass
+        # This is misleading; it's just ignoring things that shouldn't be connected
+        #print("[Info] Mismatched channel name. Expect module name", module["name"],
+              #"got", dma["outputto"])
     input_streams = [entry for entry in module["streams"]
                      if entry["type"] == "input"]
     # we need to make sure that the input list matches with the HLS IP

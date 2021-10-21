@@ -117,7 +117,7 @@ void masterqueue_check(void)
     ZynqRequest req;
     int ok = metal_io_block_read(io, A2R_BUFFER_BASE + mq_a2r_tail*sizeof(ZynqRequest), &req, sizeof(ZynqRequest));
     if(ok){
-      printf("received request %lu on dev %lu, for time %lld\n", mq_a2r_tail, req.device, req.time);
+      printf("received request %lu in slot %lu on dev %lu, for time %llu\n", req.reqId, mq_a2r_tail, req.device, req.time);
       requestqueue_push(req.device, req);
     }
   }
@@ -126,8 +126,6 @@ void masterqueue_check(void)
 
 void masterqueue_push(const ZynqRequest* req)
 {
-  printf("mq push: %d at %lld\n", req->reqId, req->time);
-
   uint32_t tail = metal_io_read32(io, R2A_TAIL); // Where the APU currently is
 
   // Move to the next slot, and check that we're not going to overflow the ring buffer
@@ -142,6 +140,8 @@ void masterqueue_push(const ZynqRequest* req)
 
   // Update the head count
   metal_io_write32(io, R2A_HEAD, mq_r2a_head);
+
+  printf("mq push: %lu in slot %lu at %llu\n", req->reqId, mq_r2a_head, req->time);
 }
 
 RequestQ* queues[NO_DEVICE]; // Assumes sequential enum numbering
